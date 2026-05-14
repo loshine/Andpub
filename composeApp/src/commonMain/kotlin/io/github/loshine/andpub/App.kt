@@ -14,6 +14,9 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.tooling.preview.Preview
+import io.github.loshine.andpub.di.AndpubKoinApplication
+import org.koin.compose.KoinApplication
+import org.koin.plugin.module.dsl.koinConfiguration
 import org.jetbrains.compose.resources.painterResource
 
 import andpub.composeapp.generated.resources.Res
@@ -22,6 +25,13 @@ import andpub.composeapp.generated.resources.compose_multiplatform
 @Composable
 @Preview
 fun App() {
+    KoinApplication(configuration = koinConfiguration<AndpubKoinApplication>()) {
+        AppContent()
+    }
+}
+
+@Composable
+private fun AppContent() {
     MaterialTheme {
         var showContent by remember { mutableStateOf(false) }
         Column(

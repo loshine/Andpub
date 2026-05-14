@@ -1,12 +1,10 @@
 package io.github.loshine.andpub
 
-import kotlin.test.Test
-import kotlin.test.assertEquals
+import io.kotest.core.spec.style.StringSpec
+import io.kotest.matchers.shouldBe
 
-class ComposeAppCommonTest {
-
-    @Test
-    fun example() {
-        assertEquals(3, 1 + 2)
+class ComposeAppCommonTest : StringSpec({
+    "example" {
+        1 + 2 shouldBe 3
     }
-}
+})
