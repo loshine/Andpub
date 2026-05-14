@@ -1,0 +1,56 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+
+# IntelliJ IDEA / Android Studio
+.idea/
+*.iml
+*.ipr
+*.iws
+out/
+
+# Gradle / Kotlin Multiplatform
+.gradle/
+.kotlin/
+build/
+**/build/
+local.properties
+
+# Kotlin/JS and Compose generated output
+kotlin-js-store/
+.compose/
+
+# Android
+captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.ap_
+*.aab
+*.dex
+
+# Kotlin/Native
+*.klib
+*.kexe
+*.kotlin_module
+
+# Xcode / Apple targets
+DerivedData/
+*.xcuserstate
+*.xcscmblueprint
+*.xccheckout
+*.moved-aside
+*.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+
+# Swift Package Manager
+.build/
+Package.resolved
+
+# Logs
+*.log
+hs_err_pid*
