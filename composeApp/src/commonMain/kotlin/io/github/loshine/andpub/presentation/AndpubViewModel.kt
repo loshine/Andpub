@@ -40,7 +40,7 @@ data class ChannelTestUiState(
 data class AndpubUiState(
     val snapshot: LocalStateSnapshot = LocalStateSnapshot(),
     val message: String? = null,
-    val channelTests: Map<MarketType, ChannelTestUiState> = emptyMap(),
+    val channelTests: Map<String, ChannelTestUiState> = emptyMap(),
 ) {
     val apps: List<AppRecord> = snapshot.apps
     val channels: List<ChannelRecord> = snapshot.channels
@@ -62,22 +62,28 @@ data class AndpubUiState(
 
 sealed interface AndpubIntent {
     data class CreateApp(val name: String, val packageName: String) : AndpubIntent
+    data class UpdateApp(val appId: String, val name: String, val packageName: String) : AndpubIntent
+    data class DeleteApp(val appId: String) : AndpubIntent
     data class SelectApp(val appId: String) : AndpubIntent
     data class UpdatePublishMode(val mode: PublishMode) : AndpubIntent
     data class UpdateToolSettings(val settings: ToolSettings) : AndpubIntent
     data class AddOrUpdateChannel(
+        val channelId: String?,
+        val name: String,
         val marketType: MarketType,
         val marketAppId: String?,
         val credentials: Map<String, String>,
         val extraFields: Map<String, String>,
     ) : AndpubIntent
     data class TestChannelConfig(
+        val testKey: String,
         val marketType: MarketType,
         val marketAppId: String?,
         val credentials: Map<String, String>,
         val extraFields: Map<String, String>,
     ) : AndpubIntent
     data class SyncChannel(val channel: ChannelRecord) : AndpubIntent
+    data class DeleteChannel(val channelId: String) : AndpubIntent
     data class UpdateUnifiedArtifact(val draft: ArtifactDraft) : AndpubIntent
     data class UpdateChannelArtifact(val channelId: String, val draft: ArtifactDraft) : AndpubIntent
     data class ApplyInspectionToUnified(val path: String, val inspection: ArtifactInspection) : AndpubIntent
@@ -127,7 +133,7 @@ class AndpubViewModel(
     private val observeState = ObserveAndpubStateUseCase(repository)
     private val updateState = UpdateAndpubStateUseCase(repository)
     private val message = MutableStateFlow<String?>(null)
-    private val channelTests = MutableStateFlow<Map<MarketType, ChannelTestUiState>>(emptyMap())
+    private val channelTests = MutableStateFlow<Map<String, ChannelTestUiState>>(emptyMap())
 
     val uiState: StateFlow<AndpubUiState> = combine(
         observeState(),
@@ -148,12 +154,15 @@ class AndpubViewModel(
     fun onIntent(intent: AndpubIntent) {
         when (intent) {
             is AndpubIntent.CreateApp -> createApp(intent.name, intent.packageName)
+            is AndpubIntent.UpdateApp -> updateApp(intent.appId, intent.name, intent.packageName)
+            is AndpubIntent.DeleteApp -> deleteApp(intent.appId)
             is AndpubIntent.SelectApp -> reduce { it.copy(selectedAppId = intent.appId) }
             is AndpubIntent.UpdatePublishMode -> reduce { it.copy(publishMode = intent.mode) }
             is AndpubIntent.UpdateToolSettings -> updateToolSettings(intent.settings)
             is AndpubIntent.AddOrUpdateChannel -> addOrUpdateChannel(intent)
             is AndpubIntent.TestChannelConfig -> testChannelConfig(intent)
             is AndpubIntent.SyncChannel -> syncChannel(intent.channel)
+            is AndpubIntent.DeleteChannel -> deleteChannel(intent.channelId)
             is AndpubIntent.UpdateUnifiedArtifact -> reduce {
                 it.copy(unifiedArtifact = intent.draft)
             }
@@ -250,6 +259,61 @@ class AndpubViewModel(
         }
     }
 
+    private fun updateApp(appId: String, name: String, packageName: String) {
+        val cleanName = name.trim()
+        val cleanPackageName = packageName.trim()
+        val snapshot = uiState.value.snapshot
+        when {
+            cleanName.isEmpty() || cleanPackageName.isEmpty() -> {
+                message.value = "应用名和包名必填"
+            }
+            !validatePackageName(cleanPackageName) -> {
+                message.value = "包名格式不正确"
+            }
+            snapshot.apps.none { it.id == appId } -> {
+                message.value = "应用不存在"
+            }
+            snapshot.apps.any { it.id != appId && it.packageName == cleanPackageName } -> {
+                message.value = "该包名已经存在"
+            }
+            else -> reduce("已更新应用") {
+                it.copy(
+                    apps = it.apps.map { app ->
+                        if (app.id == appId) {
+                            app.copy(name = cleanName, packageName = cleanPackageName)
+                        } else {
+                            app
+                        }
+                    }
+                )
+            }
+        }
+    }
+
+    private fun deleteApp(appId: String) {
+        val snapshot = uiState.value.snapshot
+        val app = snapshot.apps.firstOrNull { it.id == appId }
+        if (app == null) {
+            message.value = "应用不存在"
+            return
+        }
+
+        reduce("已删除应用 ${app.name}") {
+            val deletedChannelIds = it.channels
+                .filter { channel -> channel.appId == appId }
+                .map { channel -> channel.id }
+                .toSet()
+            val apps = it.apps.filterNot { app -> app.id == appId }
+            it.copy(
+                apps = apps,
+                channels = it.channels.filterNot { channel -> channel.appId == appId },
+                publishTasks = it.publishTasks.filterNot { task -> task.appId == appId },
+                channelArtifacts = it.channelArtifacts.filterKeys { channelId -> channelId !in deletedChannelIds },
+                selectedAppId = apps.firstOrNull { app -> app.id != appId }?.id,
+            )
+        }
+    }
+
     private fun updateToolSettings(settings: ToolSettings) {
         reduce("工具路径已更新") {
             it.copy(
@@ -263,25 +327,36 @@ class AndpubViewModel(
 
     private fun addOrUpdateChannel(intent: AndpubIntent.AddOrUpdateChannel) {
         val app = uiState.value.selectedApp ?: return
+        val cleanName = intent.name.trim()
         validateChannelCredentials(intent.marketType, intent.credentials)?.let {
             message.value = it
             return
         }
 
         reduce("已保存 ${intent.marketType.displayName} 渠道") { snapshot ->
-            val existingIndex = snapshot.channels.indexOfFirst {
-                it.appId == app.id && it.marketType == intent.marketType
-            }
+            val existingIndex = intent.channelId?.let { channelId ->
+                snapshot.channels.indexOfFirst { it.id == channelId && it.appId == app.id }
+            } ?: -1
             val existing = snapshot.channels.getOrNull(existingIndex)
+            val marketAppId = intent.marketAppId?.trim()?.takeIf { it.isNotEmpty() }
+            val credentials = intent.credentials.mapValues { it.value.trim() }
+            val extraFields = intent.extraFields.mapValues { it.value.trim() }
+            val configChanged = existing?.let {
+                it.marketType != intent.marketType ||
+                    it.marketAppId != marketAppId ||
+                    it.credentials != credentials ||
+                    it.extraFields != extraFields
+            } ?: false
             val channel = ChannelRecord(
                 id = existing?.id ?: snapshot.newId("channel"),
                 appId = app.id,
+                name = cleanName,
                 marketType = intent.marketType,
-                marketAppId = intent.marketAppId?.trim()?.takeIf { it.isNotEmpty() },
-                credentials = intent.credentials.mapValues { it.value.trim() },
-                extraFields = intent.extraFields.mapValues { it.value.trim() },
-                appInfo = existing?.appInfo,
-                syncStatus = existing?.syncStatus ?: ChannelSyncStatus.NotSynced,
+                marketAppId = marketAppId,
+                credentials = credentials,
+                extraFields = extraFields,
+                appInfo = existing?.appInfo.takeUnless { configChanged },
+                syncStatus = if (configChanged) ChannelSyncStatus.NotSynced else existing?.syncStatus ?: ChannelSyncStatus.NotSynced,
                 lastError = null,
             )
             val channels = snapshot.channels.toMutableList()
@@ -297,6 +372,23 @@ class AndpubViewModel(
         }
     }
 
+    private fun deleteChannel(channelId: String) {
+        val snapshot = uiState.value.snapshot
+        val channel = snapshot.channels.firstOrNull { it.id == channelId }
+        if (channel == null) {
+            message.value = "渠道不存在"
+            return
+        }
+
+        reduce("已删除 ${channel.marketType.displayName} 渠道") {
+            it.copy(
+                channels = it.channels.filterNot { channel -> channel.id == channelId },
+                publishTasks = it.publishTasks.filterNot { task -> task.channelId == channelId },
+                channelArtifacts = it.channelArtifacts - channelId,
+            )
+        }
+    }
+
     private fun testChannelConfig(intent: AndpubIntent.TestChannelConfig) {
         val app = uiState.value.selectedApp
         if (app == null) {
@@ -305,12 +397,12 @@ class AndpubViewModel(
         }
         validateChannelCredentials(intent.marketType, intent.credentials)?.let {
             message.value = it
-            channelTests.updateMarket(intent.marketType, ChannelTestUiState(error = it))
+            channelTests.updateTest(intent.testKey, ChannelTestUiState(error = it))
             return
         }
 
         viewModelScope.launch {
-            channelTests.updateMarket(intent.marketType, ChannelTestUiState(isLoading = true))
+            channelTests.updateTest(intent.testKey, ChannelTestUiState(isLoading = true))
             val channel = ChannelRecord(
                 id = "test-${intent.marketType.name}",
                 appId = app.id,
@@ -322,12 +414,12 @@ class AndpubViewModel(
             val result = fetchMarketAppInfo(app, channel)
             result.fold(
                 onSuccess = {
-                    channelTests.updateMarket(intent.marketType, ChannelTestUiState(info = it))
+                    channelTests.updateTest(intent.testKey, ChannelTestUiState(info = it))
                     message.value = "${intent.marketType.displayName} 连接测试成功"
                 },
                 onFailure = {
                     val error = it.message ?: "测试连接失败"
-                    channelTests.updateMarket(intent.marketType, ChannelTestUiState(error = error))
+                    channelTests.updateTest(intent.testKey, ChannelTestUiState(error = error))
                     message.value = "${intent.marketType.displayName} 连接测试失败：$error"
                 },
             )
@@ -337,7 +429,7 @@ class AndpubViewModel(
     private fun syncChannel(channel: ChannelRecord) {
         val app = uiState.value.apps.firstOrNull { it.id == channel.appId } ?: return
         viewModelScope.launch {
-            updateChannel(channel.copy(syncStatus = ChannelSyncStatus.Syncing, lastError = null))
+            updateChannel(channel.copy(appInfo = null, syncStatus = ChannelSyncStatus.Syncing, lastError = null))
             val result = fetchMarketAppInfo(app, channel)
             updateState { snapshot ->
                 val latest = snapshot.channels.firstOrNull { it.id == channel.id } ?: channel
@@ -351,6 +443,7 @@ class AndpubViewModel(
                     },
                     onFailure = {
                         latest.copy(
+                            appInfo = null,
                             syncStatus = ChannelSyncStatus.Failed,
                             lastError = it.message ?: "查询失败",
                         )
@@ -425,11 +518,11 @@ class AndpubViewModel(
         }?.plus(1) ?: 1
     }
 
-    private fun MutableStateFlow<Map<MarketType, ChannelTestUiState>>.updateMarket(
-        marketType: MarketType,
+    private fun MutableStateFlow<Map<String, ChannelTestUiState>>.updateTest(
+        testKey: String,
         state: ChannelTestUiState,
     ) {
-        value = value + (marketType to state)
+        value = value + (testKey to state)
     }
 
     private fun ArtifactDraft.withInspection(path: String, inspection: ArtifactInspection): ArtifactDraft =

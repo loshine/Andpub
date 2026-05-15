@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeContentPadding
 import androidx.compose.foundation.layout.width
@@ -17,10 +18,11 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.FilterChip
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedCard
@@ -28,6 +30,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -46,6 +49,7 @@ import io.github.loshine.andpub.domain.model.ArtifactDraft
 import io.github.loshine.andpub.domain.model.ArtifactPart
 import io.github.loshine.andpub.domain.model.ArtifactSourceType
 import io.github.loshine.andpub.domain.model.ChannelRecord
+import io.github.loshine.andpub.domain.model.ChannelSyncStatus
 import io.github.loshine.andpub.domain.model.FieldKind
 import io.github.loshine.andpub.domain.model.FieldSchema
 import io.github.loshine.andpub.domain.model.MarketAppInfo
@@ -103,8 +107,10 @@ private fun AppSidebar(
     onIntent: (AndpubIntent) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    var appName by remember { mutableStateOf("") }
-    var packageName by remember { mutableStateOf("") }
+    var appDialogId by remember { mutableStateOf<String?>(null) }
+    var deletingAppId by remember { mutableStateOf<String?>(null) }
+    val editingApp = state.apps.firstOrNull { it.id == appDialogId }
+    val deletingApp = state.apps.firstOrNull { it.id == deletingAppId }
 
     Column(
         modifier = modifier.padding(16.dp),
@@ -113,37 +119,11 @@ private fun AppSidebar(
         Text("Andpub", style = MaterialTheme.typography.headlineMedium)
         Text("多市场发包客户端", style = MaterialTheme.typography.bodyMedium)
 
-        OutlinedCard {
-            Column(
-                modifier = Modifier.padding(12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Text("添加应用", style = MaterialTheme.typography.titleMedium)
-                OutlinedTextField(
-                    value = appName,
-                    onValueChange = { appName = it },
-                    label = { Text("应用名") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                OutlinedTextField(
-                    value = packageName,
-                    onValueChange = { packageName = it },
-                    label = { Text("包名") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Button(
-                    onClick = {
-                        onIntent(AndpubIntent.CreateApp(appName, packageName))
-                        appName = ""
-                        packageName = ""
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text("创建")
-                }
-            }
+        Button(
+            onClick = { appDialogId = NEW_APP_DIALOG_ID },
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text("创建应用")
         }
 
         Text("应用列表", style = MaterialTheme.typography.titleMedium)
@@ -158,18 +138,67 @@ private fun AppSidebar(
                         onClick = { onIntent(AndpubIntent.SelectApp(app.id)) },
                         modifier = Modifier.fillMaxWidth(),
                     ) {
-                        AppListItem(app.name, app.packageName)
+                        AppListItem(
+                            name = app.name,
+                            packageName = app.packageName,
+                            onEdit = {
+                                appDialogId = app.id
+                            },
+                            onDelete = {
+                                deletingAppId = app.id
+                            },
+                        )
                     }
                 } else {
                     OutlinedCard(
                         onClick = { onIntent(AndpubIntent.SelectApp(app.id)) },
                         modifier = Modifier.fillMaxWidth(),
                     ) {
-                        AppListItem(app.name, app.packageName)
+                        AppListItem(
+                            name = app.name,
+                            packageName = app.packageName,
+                            onEdit = {
+                                onIntent(AndpubIntent.SelectApp(app.id))
+                                appDialogId = app.id
+                            },
+                            onDelete = {
+                                onIntent(AndpubIntent.SelectApp(app.id))
+                                deletingAppId = app.id
+                            },
+                        )
                     }
                 }
             }
         }
+    }
+
+    if (appDialogId != null) {
+        AppEditorDialog(
+            appId = editingApp?.id,
+            initialName = editingApp?.name.orEmpty(),
+            initialPackageName = editingApp?.packageName.orEmpty(),
+            onDismiss = { appDialogId = null },
+            onSave = { name, packageName ->
+                if (editingApp == null) {
+                    onIntent(AndpubIntent.CreateApp(name, packageName))
+                } else {
+                    onIntent(AndpubIntent.UpdateApp(editingApp.id, name, packageName))
+                }
+                appDialogId = null
+            },
+        )
+    }
+
+    deletingApp?.let { app ->
+        ConfirmDeleteDialog(
+            title = "删除应用",
+            message = "删除 ${app.name} 会同时删除它的渠道、产物草稿和发布任务。",
+            onDismiss = { deletingAppId = null },
+            onConfirm = {
+                onIntent(AndpubIntent.DeleteApp(app.id))
+                deletingAppId = null
+            },
+        )
     }
 }
 
@@ -177,14 +206,110 @@ private fun AppSidebar(
 private fun AppListItem(
     name: String,
     packageName: String,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit,
 ) {
-    Column(
+    Row(
         modifier = Modifier.padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(name, style = MaterialTheme.typography.titleSmall)
-        Text(packageName, style = MaterialTheme.typography.bodySmall)
+        Column(
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+            modifier = Modifier.weight(1f),
+        ) {
+            Text(name, style = MaterialTheme.typography.titleSmall)
+            Text(packageName, style = MaterialTheme.typography.bodySmall)
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            TextButton(onClick = onEdit) {
+                Text("编辑")
+            }
+            TextButton(
+                onClick = onDelete,
+                colors = ButtonDefaults.textButtonColors(
+                    contentColor = MaterialTheme.colorScheme.error,
+                ),
+            ) {
+                Text("删除")
+            }
+        }
     }
+}
+
+@Composable
+private fun AppEditorDialog(
+    appId: String?,
+    initialName: String,
+    initialPackageName: String,
+    onDismiss: () -> Unit,
+    onSave: (String, String) -> Unit,
+) {
+    var appName by remember(appId) { mutableStateOf(initialName) }
+    var packageName by remember(appId) { mutableStateOf(initialPackageName) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (appId == null) "创建应用" else "编辑应用") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedTextField(
+                    value = appName,
+                    onValueChange = { appName = it },
+                    label = { Text("应用名") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = packageName,
+                    onValueChange = { packageName = it },
+                    label = { Text("包名") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        },
+        confirmButton = {
+            Button(onClick = { onSave(appName, packageName) }) {
+                Text("保存")
+            }
+        },
+        dismissButton = {
+            OutlinedButton(onClick = onDismiss) {
+                Text("取消")
+            }
+        },
+    )
+}
+
+@Composable
+private fun ConfirmDeleteDialog(
+    title: String,
+    message: String,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = { Text(message) },
+        confirmButton = {
+            Button(
+                onClick = onConfirm,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.error,
+                    contentColor = MaterialTheme.colorScheme.onError,
+                ),
+            ) {
+                Text("确认删除")
+            }
+        },
+        dismissButton = {
+            OutlinedButton(onClick = onDismiss) {
+                Text("取消")
+            }
+        },
+    )
 }
 
 @Composable
@@ -317,19 +442,94 @@ private fun ChannelSection(
     state: AndpubUiState,
     onIntent: (AndpubIntent) -> Unit,
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("渠道配置和应用信息", style = MaterialTheme.typography.titleLarge)
-        Text("每个市场独立保存账号配置；点击后按市场文档调用应用详情或可用状态查询接口。")
+    var channelDialogId by remember(state.selectedAppId) { mutableStateOf<String?>(null) }
+    var deletingChannelId by remember(state.selectedAppId) { mutableStateOf<String?>(null) }
+    var infoChannelId by remember(state.selectedAppId) { mutableStateOf<String?>(null) }
+    val editingChannel = state.selectedChannels.firstOrNull { it.id == channelDialogId }
+    val deletingChannel = state.selectedChannels.firstOrNull { it.id == deletingChannelId }
+    val infoChannel = state.selectedChannels.firstOrNull { it.id == infoChannelId }
 
-        MarketType.entries.forEach { marketType ->
-            val channel = state.selectedChannels.firstOrNull { it.marketType == marketType }
-            ChannelCard(
-                state = state,
-                onIntent = onIntent,
-                marketType = marketType,
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("渠道管理", style = MaterialTheme.typography.titleLarge)
+                Text("渠道以独立记录保存，可按市场新增、编辑、删除，并查询市场侧应用信息。")
+            }
+            Button(onClick = { channelDialogId = NEW_CHANNEL_DIALOG_ID }) {
+                Text("新增渠道")
+            }
+        }
+
+        if (state.selectedChannels.isEmpty()) {
+            Text("暂无渠道")
+        }
+
+        state.selectedChannels.forEach { channel ->
+            ChannelSummaryCard(
                 channel = channel,
+                onEdit = { channelDialogId = channel.id },
+                onDelete = { deletingChannelId = channel.id },
+                onSync = {
+                    infoChannelId = channel.id
+                    onIntent(AndpubIntent.SyncChannel(channel))
+                },
             )
         }
+    }
+
+    if (channelDialogId != null) {
+        ChannelEditorDialog(
+            state = state,
+            channel = editingChannel,
+            onDismiss = { channelDialogId = null },
+            onSave = { channelId, name, marketType, marketAppId, credentials ->
+                onIntent(
+                    AndpubIntent.AddOrUpdateChannel(
+                        channelId = channelId,
+                        name = name,
+                        marketType = marketType,
+                        marketAppId = marketAppId,
+                        credentials = credentials,
+                        extraFields = emptyMap(),
+                    )
+                )
+                channelDialogId = null
+            },
+            onTest = { testKey, marketType, marketAppId, credentials ->
+                onIntent(
+                    AndpubIntent.TestChannelConfig(
+                        testKey = testKey,
+                        marketType = marketType,
+                        marketAppId = marketAppId,
+                        credentials = credentials,
+                        extraFields = emptyMap(),
+                    )
+                )
+            },
+        )
+    }
+
+    deletingChannel?.let { channel ->
+        ConfirmDeleteDialog(
+            title = "删除渠道",
+            message = "确认删除 ${channel.displayTitle()}？相关发布任务和渠道产物草稿也会删除。",
+            onDismiss = { deletingChannelId = null },
+            onConfirm = {
+                onIntent(AndpubIntent.DeleteChannel(channel.id))
+                deletingChannelId = null
+            },
+        )
+    }
+
+    infoChannel?.let { channel ->
+        ChannelInfoDialog(
+            channel = channel,
+            onDismiss = { infoChannelId = null },
+        )
     }
 }
 
@@ -401,24 +601,13 @@ private fun PublishTaskCard(
 }
 
 @Composable
-private fun ChannelCard(
-    state: AndpubUiState,
-    onIntent: (AndpubIntent) -> Unit,
-    marketType: MarketType,
-    channel: ChannelRecord?,
+private fun ChannelSummaryCard(
+    channel: ChannelRecord,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit,
+    onSync: () -> Unit,
 ) {
-    val schema = MarketDefinitions.schemaOf(marketType)
-    val credentials = remember(marketType, channel?.id) {
-        mutableStateMapOf<String, String>().apply {
-            schema.credentialFields.forEach { field ->
-                put(field.key, channel?.credentials?.get(field.key).orEmpty())
-            }
-        }
-    }
-    var marketAppId by remember(marketType, channel?.id) {
-        mutableStateOf(channel?.marketAppId.orEmpty())
-    }
-    val testState = state.channelTests[marketType]
+    val schema = MarketDefinitions.schemaOf(channel.marketType)
 
     OutlinedCard(modifier = Modifier.fillMaxWidth()) {
         Column(
@@ -428,53 +617,98 @@ private fun ChannelCard(
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
+                verticalAlignment = Alignment.Top,
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(marketType.displayName, style = MaterialTheme.typography.titleMedium)
-                    CapabilityText(schema.capability)
+                    Text(channel.displayTitle(), style = MaterialTheme.typography.titleMedium)
+                    Text(channel.marketType.displayName, style = MaterialTheme.typography.bodyMedium)
+                    Text("同步状态：${channel.syncStatus.displayName}", style = MaterialTheme.typography.bodySmall)
+                    channel.marketAppId?.let {
+                        Text("市场应用 ID：$it", style = MaterialTheme.typography.bodySmall)
+                    }
+                    channel.lastError?.let {
+                        Text("错误：$it", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                    }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(
-                        onClick = {
-                            onIntent(
-                                AndpubIntent.TestChannelConfig(
-                                    marketType = marketType,
-                                    marketAppId = marketAppId,
-                                    credentials = credentials.toMap(),
-                                    extraFields = emptyMap(),
-                                )
-                            )
-                        },
-                    ) {
-                        Text(if (testState?.isLoading == true) "测试中" else "测试连接")
-                    }
-                    OutlinedButton(
-                        enabled = channel != null,
-                        onClick = {
-                            val current = channel ?: return@OutlinedButton
-                            onIntent(AndpubIntent.SyncChannel(current))
-                        },
-                    ) {
+                    TextButton(onClick = onSync) {
                         Text("获取应用信息")
                     }
-                    Button(
-                        onClick = {
-                            onIntent(
-                                AndpubIntent.AddOrUpdateChannel(
-                                    marketType = marketType,
-                                    marketAppId = marketAppId,
-                                    credentials = credentials.toMap(),
-                                    extraFields = emptyMap(),
-                                )
-                            )
-                        },
+                    TextButton(onClick = onEdit) {
+                        Text("编辑")
+                    }
+                    TextButton(
+                        onClick = onDelete,
+                        colors = ButtonDefaults.textButtonColors(
+                            contentColor = MaterialTheme.colorScheme.error,
+                        ),
                     ) {
-                        Text(if (channel == null) "添加渠道" else "保存")
+                        Text("删除")
                     }
                 }
             }
+            CapabilityText(schema.capability)
+        }
+    }
+}
 
+@Composable
+private fun ChannelEditorDialog(
+    state: AndpubUiState,
+    channel: ChannelRecord?,
+    onDismiss: () -> Unit,
+    onSave: (String?, String, MarketType, String?, Map<String, String>) -> Unit,
+    onTest: (String, MarketType, String?, Map<String, String>) -> Unit,
+) {
+    var marketType by remember(channel?.id) { mutableStateOf(channel?.marketType ?: MarketType.Huawei) }
+    val schema = MarketDefinitions.schemaOf(marketType)
+    val credentials = remember(marketType, channel?.id) {
+        mutableStateMapOf<String, String>().apply {
+            schema.credentialFields.forEach { field ->
+                put(field.key, channel?.credentials?.get(field.key).orEmpty())
+            }
+        }
+    }
+    var channelName by remember(channel?.id) { mutableStateOf(channel?.name.orEmpty()) }
+    var marketAppId by remember(marketType, channel?.id) {
+        mutableStateOf(channel?.marketAppId.orEmpty())
+    }
+    val testKey = channel?.id ?: "new-${marketType.name}"
+    val testState = state.channelTests[testKey]
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (channel == null) "新增渠道" else "编辑渠道") },
+        text = {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 560.dp)
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            CapabilityText(schema.capability)
+
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                MarketType.entries.forEach { type ->
+                    FilterChip(
+                        selected = marketType == type,
+                        onClick = { marketType = type },
+                        label = { Text(type.displayName) },
+                    )
+                }
+            }
+
+            OutlinedTextField(
+                value = channelName,
+                onValueChange = { channelName = it },
+                label = { Text("渠道名称，可选") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
             OutlinedTextField(
                 value = marketAppId,
                 onValueChange = { marketAppId = it },
@@ -503,13 +737,43 @@ private fun ChannelCard(
                     error = testState.error,
                 )
             }
-
-            if (channel != null) {
-                HorizontalDivider()
-                ChannelInfo(channel)
-            }
         }
-    }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    onSave(
+                        channel?.id,
+                        channelName,
+                        marketType,
+                        marketAppId,
+                        credentials.toMap(),
+                    )
+                },
+            ) {
+                Text("保存")
+            }
+        },
+        dismissButton = {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    onClick = {
+                        onTest(
+                            testKey,
+                            marketType,
+                            marketAppId,
+                            credentials.toMap(),
+                        )
+                    },
+                ) {
+                    Text(if (testState?.isLoading == true) "测试中" else "测试连接")
+                }
+                OutlinedButton(onClick = onDismiss) {
+                    Text("取消")
+                }
+            }
+        },
+    )
 }
 
 @Composable
@@ -570,23 +834,49 @@ private fun CapabilityText(
 }
 
 @Composable
-private fun ChannelInfo(
+private fun ChannelInfoDialog(
     channel: ChannelRecord,
+    onDismiss: () -> Unit,
 ) {
-    val info = channel.appInfo
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("${channel.displayTitle()} 应用信息") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("同步状态：${channel.syncStatus.displayName}")
+                if (channel.syncStatus == ChannelSyncStatus.Syncing) {
+                    Text("正在获取市场侧应用信息...")
+                }
+                if (channel.syncStatus != ChannelSyncStatus.Syncing) {
+                    channel.appInfo?.let { info ->
+                        MarketAppInfoContent(info)
+                    }
+                }
+                channel.lastError?.let {
+                    Text("错误：$it", color = MaterialTheme.colorScheme.error)
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = onDismiss) {
+                Text("关闭")
+            }
+        },
+    )
+}
+
+@Composable
+private fun MarketAppInfoContent(
+    info: MarketAppInfo,
+) {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text("渠道已配置", style = MaterialTheme.typography.titleSmall)
-        Text("同步状态：${channel.syncStatus.displayName}")
-        if (info != null) {
-            Text("市场应用 ID：${info.marketAppId}")
-            Text("线上版本：${info.onlineVersion ?: "-"}")
-            Text("审核状态：${info.auditStatus ?: "-"}")
-            Text("上架状态：${info.releaseStatus ?: "-"}")
-            Text("更新时间：${info.updatedAtText}")
-        }
-        channel.lastError?.let {
-            Text("错误：$it", color = MaterialTheme.colorScheme.error)
-        }
+        Text("市场应用 ID：${info.marketAppId}")
+        Text("应用名：${info.appName}")
+        Text("包名：${info.packageName}")
+        Text("线上版本：${info.onlineVersion ?: "-"}")
+        Text("审核状态：${info.auditStatus ?: "-"}")
+        Text("上架状态：${info.releaseStatus ?: "-"}")
+        Text("更新时间：${info.updatedAtText}")
     }
 }
 
@@ -638,7 +928,7 @@ private fun ArtifactSection(
             channels.forEach { channel ->
                 val capability = MarketDefinitions.schemaOf(channel.marketType).capability
                 ArtifactEditor(
-                    title = channel.marketType.displayName,
+                    title = channel.displayTitle(),
                     draft = state.artifactDrafts[channel.id] ?: ArtifactDraft(),
                     toolSettings = state.toolSettings,
                     allowedPackageTypes = listOf(capability).allowedPackageTypes(),
@@ -853,6 +1143,12 @@ private fun List<MarketCapability>.allowedPackageTypes(): Set<PackageType> {
     val candidates = PackageType.entries.toSet()
     return filterSupportedPackageTypes(candidates)
 }
+
+private fun ChannelRecord.displayTitle(): String =
+    name.takeIf { it.isNotBlank() } ?: marketType.displayName
+
+private const val NEW_APP_DIALOG_ID = "new-app"
+private const val NEW_CHANNEL_DIALOG_ID = "new-channel"
 
 private fun List<MarketCapability>.filterSupportedPackageTypes(
     candidates: Set<PackageType>,

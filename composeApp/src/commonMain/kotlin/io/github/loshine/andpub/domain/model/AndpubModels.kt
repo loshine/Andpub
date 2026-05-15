@@ -98,6 +98,7 @@ data class AppRecord(
 data class ChannelRecord(
     val id: String,
     val appId: String,
+    val name: String = "",
     val marketType: MarketType,
     val marketAppId: String?,
     val credentials: Map<String, String>,

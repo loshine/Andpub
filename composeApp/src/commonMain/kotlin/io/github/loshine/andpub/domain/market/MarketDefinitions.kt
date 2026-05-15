@@ -20,7 +20,7 @@ object MarketDefinitions {
             ),
             credentialFields = listOf(
                 FieldSchema("clientId", "client_id"),
-                FieldSchema("accessToken", "access_token", kind = FieldKind.Password),
+                FieldSchema("clientSecret", "client_secret", kind = FieldKind.Password),
             ),
         ),
         MarketSchema(
