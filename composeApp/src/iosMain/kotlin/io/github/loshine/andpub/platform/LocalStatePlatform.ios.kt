@@ -1,10 +1,10 @@
 package io.github.loshine.andpub.platform
 
 import androidx.room.Room
-import io.github.loshine.andpub.domain.storage.AndpubDatabase
-import io.github.loshine.andpub.domain.storage.LocalStateStore
-import io.github.loshine.andpub.domain.storage.RoomLocalStateStore
-import io.github.loshine.andpub.domain.storage.buildAndpubDatabase
+import io.github.loshine.andpub.data.local.AndpubDatabase
+import io.github.loshine.andpub.data.local.LocalStateStore
+import io.github.loshine.andpub.data.local.RoomLocalStateStore
+import io.github.loshine.andpub.data.local.buildAndpubDatabase
 import kotlinx.cinterop.ExperimentalForeignApi
 import platform.Foundation.NSDocumentDirectory
 import platform.Foundation.NSFileManager

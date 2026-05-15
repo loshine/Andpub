@@ -28,21 +28,19 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
-import io.github.loshine.andpub.application.AndpubController
 import io.github.loshine.andpub.domain.market.MarketDefinitions
 import io.github.loshine.andpub.domain.model.ArtifactDraft
 import io.github.loshine.andpub.domain.model.ArtifactPart
@@ -61,19 +59,16 @@ import io.github.loshine.andpub.domain.model.ToolSettings
 import io.github.loshine.andpub.platform.inspectLocalArtifact
 import io.github.loshine.andpub.platform.inspectToolSettings
 import io.github.loshine.andpub.platform.pickArtifactFilePath
-import kotlinx.coroutines.flow.drop
+import io.github.loshine.andpub.presentation.AndpubIntent
+import io.github.loshine.andpub.presentation.AndpubUiState
+import io.github.loshine.andpub.presentation.AndpubViewModel
 import kotlinx.coroutines.launch
 
 @Composable
 fun AndpubWorkspace(
-    controller: AndpubController,
+    viewModel: AndpubViewModel,
 ) {
-    LaunchedEffect(controller) {
-        controller.loadState()
-        snapshotFlow { controller.stateVersion }
-            .drop(1)
-            .collect { controller.saveState() }
-    }
+    val state by viewModel.uiState.collectAsState()
 
     Scaffold { padding ->
         Row(
@@ -83,7 +78,8 @@ fun AndpubWorkspace(
                 .fillMaxSize(),
         ) {
             AppSidebar(
-                controller = controller,
+                state = state,
+                onIntent = viewModel::onIntent,
                 modifier = Modifier
                     .width(304.dp)
                     .fillMaxHeight(),
@@ -92,7 +88,10 @@ fun AndpubWorkspace(
                 tonalElevation = 1.dp,
                 modifier = Modifier.fillMaxSize(),
             ) {
-                AppDetail(controller = controller)
+                AppDetail(
+                    state = state,
+                    onIntent = viewModel::onIntent,
+                )
             }
         }
     }
@@ -100,7 +99,8 @@ fun AndpubWorkspace(
 
 @Composable
 private fun AppSidebar(
-    controller: AndpubController,
+    state: AndpubUiState,
+    onIntent: (AndpubIntent) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var appName by remember { mutableStateOf("") }
@@ -135,7 +135,7 @@ private fun AppSidebar(
                 )
                 Button(
                     onClick = {
-                        controller.createApp(appName, packageName)
+                        onIntent(AndpubIntent.CreateApp(appName, packageName))
                         appName = ""
                         packageName = ""
                     },
@@ -151,18 +151,18 @@ private fun AppSidebar(
             verticalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier.fillMaxSize(),
         ) {
-            items(controller.apps, key = { it.id }) { app ->
-                val selected = controller.selectedAppId == app.id
+            items(state.apps, key = { it.id }) { app ->
+                val selected = state.selectedAppId == app.id
                 if (selected) {
                     ElevatedCard(
-                        onClick = { controller.selectApp(app.id) },
+                        onClick = { onIntent(AndpubIntent.SelectApp(app.id)) },
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         AppListItem(app.name, app.packageName)
                     }
                 } else {
                     OutlinedCard(
-                        onClick = { controller.selectApp(app.id) },
+                        onClick = { onIntent(AndpubIntent.SelectApp(app.id)) },
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         AppListItem(app.name, app.packageName)
@@ -189,9 +189,10 @@ private fun AppListItem(
 
 @Composable
 private fun AppDetail(
-    controller: AndpubController,
+    state: AndpubUiState,
+    onIntent: (AndpubIntent) -> Unit,
 ) {
-    val app = controller.selectedApp
+    val app = state.selectedApp
     if (app == null) {
         Box(
             modifier = Modifier.fillMaxSize(),
@@ -218,27 +219,28 @@ private fun AppDetail(
                 Text(app.name, style = MaterialTheme.typography.headlineSmall)
                 Text(app.packageName, style = MaterialTheme.typography.bodyMedium)
             }
-            controller.message?.let {
+            state.message?.let {
                 Text(it, style = MaterialTheme.typography.bodyMedium)
             }
         }
 
-        ToolSettingsSection(controller)
-        ChannelSection(controller)
-        ArtifactSection(controller)
-        PublishTaskSection(controller)
+        ToolSettingsSection(state, onIntent)
+        ChannelSection(state, onIntent)
+        ArtifactSection(state, onIntent)
+        PublishTaskSection(state, onIntent)
     }
 }
 
 @Composable
 private fun ToolSettingsSection(
-    controller: AndpubController,
+    state: AndpubUiState,
+    onIntent: (AndpubIntent) -> Unit,
 ) {
-    var androidSdkPath by remember(controller.toolSettings) {
-        mutableStateOf(controller.toolSettings.androidSdkPath)
+    var androidSdkPath by remember(state.toolSettings) {
+        mutableStateOf(state.toolSettings.androidSdkPath)
     }
-    var bundletoolPath by remember(controller.toolSettings) {
-        mutableStateOf(controller.toolSettings.bundletoolPath)
+    var bundletoolPath by remember(state.toolSettings) {
+        mutableStateOf(state.toolSettings.bundletoolPath)
     }
     var toolMessages by remember { mutableStateOf<List<String>>(emptyList()) }
     val scope = rememberCoroutineScope()
@@ -263,7 +265,7 @@ private fun ToolSettingsSection(
                             androidSdkPath = androidSdkPath,
                             bundletoolPath = bundletoolPath,
                         )
-                        controller.updateToolSettings(settings)
+                        onIntent(AndpubIntent.UpdateToolSettings(settings))
                         scope.launch {
                             toolMessages = inspectToolSettings(
                                 androidSdkPath = settings.androidSdkPath,
@@ -312,16 +314,18 @@ private fun ToolSettingsSection(
 
 @Composable
 private fun ChannelSection(
-    controller: AndpubController,
+    state: AndpubUiState,
+    onIntent: (AndpubIntent) -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("渠道配置和应用信息", style = MaterialTheme.typography.titleLarge)
         Text("每个市场独立保存账号配置；点击后按市场文档调用应用详情或可用状态查询接口。")
 
         MarketType.entries.forEach { marketType ->
-            val channel = controller.selectedChannels.firstOrNull { it.marketType == marketType }
+            val channel = state.selectedChannels.firstOrNull { it.marketType == marketType }
             ChannelCard(
-                controller = controller,
+                state = state,
+                onIntent = onIntent,
                 marketType = marketType,
                 channel = channel,
             )
@@ -331,10 +335,11 @@ private fun ChannelSection(
 
 @Composable
 private fun PublishTaskSection(
-    controller: AndpubController,
+    state: AndpubUiState,
+    onIntent: (AndpubIntent) -> Unit,
 ) {
-    val app = controller.selectedApp ?: return
-    val tasks = controller.publishTasks.filter { it.appId == app.id }
+    val app = state.selectedApp ?: return
+    val tasks = state.publishTasks.filter { it.appId == app.id }
 
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(
@@ -346,7 +351,7 @@ private fun PublishTaskSection(
                 Text("发布任务", style = MaterialTheme.typography.titleLarge)
                 Text("当前阶段只创建 mock 任务，用于验证任务模型、状态和日志。")
             }
-            Button(onClick = controller::createMockPublishTasks) {
+            Button(onClick = { onIntent(AndpubIntent.CreateMockPublishTasks) }) {
                 Text("创建 mock 任务")
             }
         }
@@ -397,7 +402,8 @@ private fun PublishTaskCard(
 
 @Composable
 private fun ChannelCard(
-    controller: AndpubController,
+    state: AndpubUiState,
+    onIntent: (AndpubIntent) -> Unit,
     marketType: MarketType,
     channel: ChannelRecord?,
 ) {
@@ -412,13 +418,7 @@ private fun ChannelCard(
     var marketAppId by remember(marketType, channel?.id) {
         mutableStateOf(channel?.marketAppId.orEmpty())
     }
-    var testInfo by remember(marketType, channel?.id) {
-        mutableStateOf<MarketAppInfo?>(null)
-    }
-    var testError by remember(marketType, channel?.id) {
-        mutableStateOf<String?>(null)
-    }
-    val scope = rememberCoroutineScope()
+    val testState = state.channelTests[marketType]
 
     OutlinedCard(modifier = Modifier.fillMaxWidth()) {
         Column(
@@ -437,43 +437,36 @@ private fun ChannelCard(
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(
                         onClick = {
-                            scope.launch {
-                                controller.testChannelConfig(
+                            onIntent(
+                                AndpubIntent.TestChannelConfig(
                                     marketType = marketType,
                                     marketAppId = marketAppId,
                                     credentials = credentials.toMap(),
                                     extraFields = emptyMap(),
-                                ).fold(
-                                    onSuccess = {
-                                        testInfo = it
-                                        testError = null
-                                    },
-                                    onFailure = {
-                                        testInfo = null
-                                        testError = it.message ?: "测试连接失败"
-                                    },
                                 )
-                            }
+                            )
                         },
                     ) {
-                        Text("测试连接")
+                        Text(if (testState?.isLoading == true) "测试中" else "测试连接")
                     }
                     OutlinedButton(
                         enabled = channel != null,
                         onClick = {
                             val current = channel ?: return@OutlinedButton
-                            scope.launch { controller.syncChannel(current) }
+                            onIntent(AndpubIntent.SyncChannel(current))
                         },
                     ) {
                         Text("获取应用信息")
                     }
                     Button(
                         onClick = {
-                            controller.addOrUpdateChannel(
-                                marketType = marketType,
-                                marketAppId = marketAppId,
-                                credentials = credentials.toMap(),
-                                extraFields = emptyMap(),
+                            onIntent(
+                                AndpubIntent.AddOrUpdateChannel(
+                                    marketType = marketType,
+                                    marketAppId = marketAppId,
+                                    credentials = credentials.toMap(),
+                                    extraFields = emptyMap(),
+                                )
                             )
                         },
                     ) {
@@ -504,10 +497,10 @@ private fun ChannelCard(
                 }
             }
 
-            if (testInfo != null || testError != null) {
+            if (testState?.info != null || testState?.error != null) {
                 ConnectionTestResult(
-                    info = testInfo,
-                    error = testError,
+                    info = testState.info,
+                    error = testState.error,
                 )
             }
 
@@ -599,45 +592,46 @@ private fun ChannelInfo(
 
 @Composable
 private fun ArtifactSection(
-    controller: AndpubController,
+    state: AndpubUiState,
+    onIntent: (AndpubIntent) -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("阶段 3：本地产物处理", style = MaterialTheme.typography.titleLarge)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             PublishMode.entries.forEach { mode ->
                 FilterChip(
-                    selected = controller.publishMode == mode,
-                    onClick = { controller.updatePublishMode(mode) },
+                    selected = state.publishMode == mode,
+                    onClick = { onIntent(AndpubIntent.UpdatePublishMode(mode)) },
                     label = { Text(mode.displayName) },
                 )
             }
         }
 
-        if (controller.publishMode == PublishMode.UnifiedArtifact) {
-            val selectedCapabilities = controller.selectedChannels
+        if (state.publishMode == PublishMode.UnifiedArtifact) {
+            val selectedCapabilities = state.selectedChannels
                 .map { MarketDefinitions.schemaOf(it.marketType).capability }
             ArtifactEditor(
                 title = "统一产物",
-                draft = controller.unifiedArtifactDraft,
-                toolSettings = controller.toolSettings,
+                draft = state.unifiedArtifactDraft,
+                toolSettings = state.toolSettings,
                 allowedPackageTypes = selectedCapabilities.allowedPackageTypes(),
                 allowUrl = selectedCapabilities.all { it.supportsUserUrl },
-                onDraftChange = controller::updateUnifiedArtifact,
+                onDraftChange = { onIntent(AndpubIntent.UpdateUnifiedArtifact(it)) },
                 onPickFile = { path, inspectionResult ->
                     inspectionResult.fold(
-                        onSuccess = { controller.applyInspectionToUnified(path, it) },
-                        onFailure = { controller.applyArtifactErrorToUnified(path, it) },
+                        onSuccess = { onIntent(AndpubIntent.ApplyInspectionToUnified(path, it)) },
+                        onFailure = { onIntent(AndpubIntent.ApplyArtifactErrorToUnified(path, it)) },
                     )
                 },
                 onPickSplitFile = { slot, path, inspectionResult ->
                     inspectionResult.fold(
-                        onSuccess = { controller.applySplitInspectionToUnified(slot, path, it) },
-                        onFailure = { controller.applySplitArtifactErrorToUnified(slot, path, it) },
+                        onSuccess = { onIntent(AndpubIntent.ApplySplitInspectionToUnified(slot, path, it)) },
+                        onFailure = { onIntent(AndpubIntent.ApplySplitArtifactErrorToUnified(slot, path, it)) },
                     )
                 },
             )
         } else {
-            val channels = controller.selectedChannels
+            val channels = state.selectedChannels
             if (channels.isEmpty()) {
                 Text("先添加渠道，再为每个渠道配置独立产物。")
             }
@@ -645,21 +639,21 @@ private fun ArtifactSection(
                 val capability = MarketDefinitions.schemaOf(channel.marketType).capability
                 ArtifactEditor(
                     title = channel.marketType.displayName,
-                    draft = controller.artifactDrafts[channel.id] ?: ArtifactDraft(),
-                    toolSettings = controller.toolSettings,
+                    draft = state.artifactDrafts[channel.id] ?: ArtifactDraft(),
+                    toolSettings = state.toolSettings,
                     allowedPackageTypes = listOf(capability).allowedPackageTypes(),
                     allowUrl = capability.supportsUserUrl,
-                    onDraftChange = { controller.updateChannelArtifact(channel.id, it) },
+                    onDraftChange = { onIntent(AndpubIntent.UpdateChannelArtifact(channel.id, it)) },
                     onPickFile = { path, inspectionResult ->
                         inspectionResult.fold(
-                            onSuccess = { controller.applyInspectionToChannel(channel.id, path, it) },
-                            onFailure = { controller.applyArtifactErrorToChannel(channel.id, path, it) },
+                            onSuccess = { onIntent(AndpubIntent.ApplyInspectionToChannel(channel.id, path, it)) },
+                            onFailure = { onIntent(AndpubIntent.ApplyArtifactErrorToChannel(channel.id, path, it)) },
                         )
                     },
                     onPickSplitFile = { slot, path, inspectionResult ->
                         inspectionResult.fold(
-                            onSuccess = { controller.applySplitInspectionToChannel(channel.id, slot, path, it) },
-                            onFailure = { controller.applySplitArtifactErrorToChannel(channel.id, slot, path, it) },
+                            onSuccess = { onIntent(AndpubIntent.ApplySplitInspectionToChannel(channel.id, slot, path, it)) },
+                            onFailure = { onIntent(AndpubIntent.ApplySplitArtifactErrorToChannel(channel.id, slot, path, it)) },
                         )
                     },
                 )

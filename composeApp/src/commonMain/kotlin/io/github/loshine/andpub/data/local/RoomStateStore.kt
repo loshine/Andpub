@@ -1,4 +1,4 @@
-package io.github.loshine.andpub.domain.storage
+package io.github.loshine.andpub.data.local
 
 import androidx.room.ConstructedBy
 import androidx.room.Dao
@@ -13,10 +13,13 @@ import androidx.room.RoomDatabaseConstructor
 import androidx.sqlite.driver.bundled.BundledSQLiteDriver
 import io.github.loshine.andpub.domain.model.LocalStateSnapshot
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
 interface LocalStateStore {
+    fun observe(): Flow<LocalStateSnapshot?>
     suspend fun load(): LocalStateSnapshot?
     suspend fun save(snapshot: LocalStateSnapshot)
 }
@@ -29,6 +32,9 @@ data class LocalStateEntity(
 
 @Dao
 interface LocalStateDao {
+    @Query("SELECT value FROM LocalStateEntity WHERE key = :key")
+    fun observeValue(key: String): Flow<String?>
+
     @Query("SELECT value FROM LocalStateEntity WHERE key = :key")
     suspend fun getValue(key: String): String?
 
@@ -61,6 +67,11 @@ fun buildAndpubDatabase(
 class RoomLocalStateStore(
     private val database: AndpubDatabase,
 ) : LocalStateStore {
+    override fun observe(): Flow<LocalStateSnapshot?> =
+        database.localStateDao()
+            .observeValue(STATE_KEY)
+            .map { value -> value?.let { json.decodeFromString<LocalStateSnapshot>(it) } }
+
     override suspend fun load(): LocalStateSnapshot? {
         val value = database.localStateDao().getValue(STATE_KEY) ?: return null
         return json.decodeFromString<LocalStateSnapshot>(value)
@@ -87,10 +98,14 @@ class RoomLocalStateStore(
 
 class InMemoryLocalStateStore : LocalStateStore {
     private var snapshot: LocalStateSnapshot? = null
+    private val snapshots = kotlinx.coroutines.flow.MutableStateFlow<LocalStateSnapshot?>(null)
+
+    override fun observe(): Flow<LocalStateSnapshot?> = snapshots
 
     override suspend fun load(): LocalStateSnapshot? = snapshot
 
     override suspend fun save(snapshot: LocalStateSnapshot) {
         this.snapshot = snapshot
+        snapshots.value = snapshot
     }
 }
