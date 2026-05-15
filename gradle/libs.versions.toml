@@ -17,6 +17,7 @@ kotlinx-coroutines = "1.11.0"
 kotlinx-collections-immutable = "0.4.0"
 ksp = "2.3.8"
 kotest = "6.1.11"
+mockk = "1.14.9"
 koin = "4.2.1"
 koin-plugin = "1.0.0-RC2"
 ktor = "3.5.0"
@@ -48,6 +49,8 @@ compose-preview = { module = "org.jetbrains.compose.ui:ui-tooling-preview", vers
 compose-uiTooling = { module = "org.jetbrains.compose.ui:ui-tooling", version.ref = "composeMultiplatform" }
 kotest-assertions-core = { module = "io.kotest:kotest-assertions-core", version.ref = "kotest" }
 kotest-framework-engine = { module = "io.kotest:kotest-framework-engine", version.ref = "kotest" }
+kotest-runner-junit5 = { module = "io.kotest:kotest-runner-junit5", version.ref = "kotest" }
+mockk = { module = "io.mockk:mockk", version.ref = "mockk" }
 koin-bom = { module = "io.insert-koin:koin-bom", version.ref = "koin" }
 koin-core = { module = "io.insert-koin:koin-core" }
 koin-android = { module = "io.insert-koin:koin-android" }

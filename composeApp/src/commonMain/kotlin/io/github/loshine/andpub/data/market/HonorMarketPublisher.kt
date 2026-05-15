@@ -38,8 +38,11 @@ class HonorMarketPublisher(
 
     private fun auditStatusText(status: Int): String =
         when (status) {
-            0 -> "审核通过"
-            1 -> "审核不通过"
+            0 -> "审核中"
+            1 -> "审核通过"
+            2 -> "审核不通过"
+            3 -> "其他非审核状态"
+            4 -> "编辑中，未提交审核"
             else -> "未知审核状态($status)"
         }
 }

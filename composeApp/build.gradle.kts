@@ -88,6 +88,10 @@ kotlin {
             implementation(libs.ktor.engine.okhttp)
             runtimeOnly(libs.slf4j.simple)
         }
+        jvmTest.dependencies {
+            implementation(libs.kotest.runner.junit5)
+            implementation(libs.mockk)
+        }
         iosMain.dependencies {
             implementation(project.dependencies.platform(libs.ktor.bom))
             implementation(libs.ktor.engine.darwin)
@@ -119,5 +123,6 @@ compose.desktop {
 }
 
 tasks.withType<Test>().configureEach {
+    useJUnitPlatform()
     outputs.upToDateWhen { false }
 }
