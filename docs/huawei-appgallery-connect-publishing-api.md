@@ -2,6 +2,7 @@
 
 来源：
 
+- https://developer.huawei.com/consumer/cn/doc/AppGallery-connect-Guides/agcapi-getstarted-0000001111845114
 - https://developer.huawei.com/consumer/cn/doc/AppGallery-connect-References/agcapi-appid-list-0000001111845086
 - https://developer.huawei.com/consumer/cn/doc/AppGallery-connect-References/agcapi-app-info-query-0000001158365045
 - https://developer.huawei.com/consumer/cn/doc/AppGallery-connect-References/agcapi-app-info-update-0000001111685198
@@ -48,7 +49,61 @@ https://connect-api.cloud.huawei.com
 
 ## 2. 鉴权方式
 
-官方文档同时给出两种调用方式。实际接入选一种，别混着传。
+官方 Getting Started 文档现在列出三种授权方式。新接入优先使用 Service Account；API 客户端和 OAuth 客户端保留为兼容或特定场景方式。实际接入选一种，别混着传。
+
+### 2.1 Service Account 方式（推荐）
+
+Service Account 用于服务器与服务器之间的接口鉴权。官方文档说明它相比 API 客户端方式更安全，并提示新创建凭据应选择 Service Account，已有 API 客户端应尽快切换。
+
+基本流程：
+
+1. 登录 AppGallery Connect，进入“用户与访问”。
+2. 左侧导航选择“API密钥 > Connect API”。
+3. 在“Service Account”页签创建 Service Account。
+4. 类型选择“开发者级”。Connect API 要求使用开发者级凭据。
+5. 选择角色；角色决定该 Service Account 可访问哪些 AppGallery Connect API。
+6. 创建成功后保存自动下载的 `******private.json` 凭据文件。
+
+Service Account JSON 凭据包含以下关键字段：
+
+| 字段 | 说明 |
+| --- | --- |
+| `key_id` | 密钥 ID，用于 JWT Header 的 `kid` |
+| `private_key` | 私钥，用于 JWT 签名 |
+| `sub_account` | Service Account 标识，用于 JWT Payload 的 `iss` |
+| `token_uri` | Token endpoint，示例为 `https://oauth-login.cloud.huawei.com/oauth2/v3/token` |
+
+获取鉴权令牌：
+
+1. 用 `key_id` 和 `private_key` 生成 JWT。
+2. JWT Header 字段：
+
+| 字段 | 值 |
+| --- | --- |
+| `kid` | `key_id` |
+| `typ` | `JWT` |
+| `alg` | `PS256` |
+
+3. JWT Payload 使用以下字段：
+
+| 字段 | 值 |
+| --- | --- |
+| `aud` | `https://oauth-login.cloud.huawei.com/oauth2/v3/token` |
+| `iss` | `sub_account` |
+| `exp` | 过期时间，UTC 时间戳，等于 `iat + 3600` 秒 |
+| `iat` | 签发时间，UTC 时间戳，单位秒 |
+
+4. 将 Base64URL 编码后的 Header 和 Payload 用 `.` 拼接，使用 `private_key` 和 `SHA256withRSA/PSS` 签名，再对签名做 Base64URL 编码，得到 `header.payload.signature`。
+5. 使用凭据文件中的 `token_uri` 换取鉴权令牌。
+6. 获取令牌后访问具体 AppGallery Connect API。
+
+注意：
+
+- Service Account 私钥必须按密钥处理，不能写进仓库、日志或崩溃报告。
+- 本项目当前华为实现仍是 API 客户端方式；改造时应新增 Service Account 凭据模型，不要把 `private_key` 塞进 `clientSecret`。
+- 下文接口请求示例仍保留 API 客户端 header，等实现切到 Service Account 后再同步更新示例。
+
+### 2.2 API 客户端方式
 
 API 客户端方式，所有 Publishing API 请求 Header 带：
 
@@ -57,12 +112,36 @@ API 客户端方式，所有 Publishing API 请求 Header 带：
 | `client_id` | 是 | API 客户端 ID |
 | `Authorization` | 是 | `Bearer ${access_token}`，`access_token` 来自获取 Token 接口 |
 
+创建 API 客户端时，“项目”保持 `N/A`，表示团队级 API 客户端；官方文档提示如果不为 `N/A`，调用 API 可能返回 403。
+
+获取访问 API 的 Token：
+
+```http
+POST /oauth2/v1/token HTTP/1.1
+Host: connect-api.cloud.huawei.com
+Content-Type: application/json
+
+{
+  "client_id": "${client_id}",
+  "client_secret": "${client_secret}",
+  "grant_type": "client_credentials"
+}
+```
+
+### 2.3 OAuth 客户端方式
+
 OAuth 客户端方式，Header 带：
 
 | Header | 必选 | 说明 |
 | --- | --- | --- |
 | `teamId` | 是 | 开发者团队 ID |
 | `oauth2Token` | 是 | 用户授权得到的 Access Token |
+
+OAuth 客户端方式面向平台类开发者；官方文档说明普通应用开发者暂无法使用。该方式需要申请 Scope、对接华为账号服务、获取用户授权码，再以用户身份访问 API。Publishing API、Upload Management API 和 Testing API 对应的 Scope URL 都是：
+
+```text
+https://www.huawei.com/auth/agc/publish
+```
 
 JSON 接口统一使用：
 
@@ -74,7 +153,7 @@ Content-Type: application/json
 
 更新已有 Android 应用，最直接的链路是让华为后台从公网 URL 拉包并提交审核：
 
-1. 获取 `access_token`。
+1. 按选定鉴权方式获取访问令牌。
 2. 调用 `GET /api/publish/v2/appid-list`，用包名查 `appId`。
 3. 可选：调用 `GET /api/publish/v2/app-info` 查询当前应用资料。
 4. 可选：调用 `PUT /api/publish/v2/app-info`、`PUT /api/publish/v2/app-language-info` 更新应用资料。
