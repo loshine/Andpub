@@ -21,7 +21,10 @@ koin = "4.2.1"
 koin-plugin = "1.0.0-RC2"
 ktor = "3.4.3"
 logging-napier = "2.7.1"
+slf4j = "2.0.17"
 datastore = "1.2.1"
+room = "2.8.4"
+sqlite = "2.6.2"
 
 [libraries]
 kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
@@ -61,8 +64,12 @@ ktor-engine-okhttp = { module = "io.ktor:ktor-client-okhttp" }
 ktor-engine-darwin = { module = "io.ktor:ktor-client-darwin" }
 ktor-serialization-kotlinx-json = { module = "io.ktor:ktor-serialization-kotlinx-json" }
 logging-napier = { module = "io.github.aakira:napier", version.ref = "logging-napier" }
+slf4j-simple = { module = "org.slf4j:slf4j-simple", version.ref = "slf4j" }
 datastore = { module = "androidx.datastore:datastore", version.ref = "datastore" }
 datastore-preferences = { module = "androidx.datastore:datastore-preferences", version.ref = "datastore" }
+androidx-room-runtime = { module = "androidx.room:room-runtime", version.ref = "room" }
+androidx-room-compiler = { module = "androidx.room:room-compiler", version.ref = "room" }
+androidx-sqlite-bundled = { module = "androidx.sqlite:sqlite-bundled", version.ref = "sqlite" }
 
 [plugins]
 androidApplication = { id = "com.android.application", version.ref = "agp" }
@@ -75,3 +82,4 @@ kotlinxSerialization = { id = "org.jetbrains.kotlin.plugin.serialization", versi
 googleDevtoolsKsp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
 koinCompiler = { id = "io.insert-koin.compiler.plugin", version.ref = "koin-plugin" }
 kotest = { id = "io.kotest", version.ref = "kotest" }
+androidxRoom = { id = "androidx.room", version.ref = "room" }

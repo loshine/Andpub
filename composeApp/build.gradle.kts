@@ -11,6 +11,7 @@ plugins {
     alias(libs.plugins.googleDevtoolsKsp)
     alias(libs.plugins.koinCompiler)
     alias(libs.plugins.kotest)
+    alias(libs.plugins.androidxRoom)
 }
 
 kotlin {
@@ -64,6 +65,8 @@ kotlin {
 
             implementation(libs.datastore)
             implementation(libs.datastore.preferences)
+            implementation(libs.androidx.room.runtime)
+            implementation(libs.androidx.sqlite.bundled)
 
             implementation(libs.logging.napier)
         }
@@ -83,12 +86,24 @@ kotlin {
             implementation(libs.kotlinx.coroutinesSwing)
             implementation(project.dependencies.platform(libs.ktor.bom))
             implementation(libs.ktor.engine.okhttp)
+            runtimeOnly(libs.slf4j.simple)
         }
         iosMain.dependencies {
             implementation(project.dependencies.platform(libs.ktor.bom))
             implementation(libs.ktor.engine.darwin)
         }
     }
+}
+
+dependencies {
+    add("kspAndroid", libs.androidx.room.compiler)
+    add("kspJvm", libs.androidx.room.compiler)
+    add("kspIosArm64", libs.androidx.room.compiler)
+    add("kspIosSimulatorArm64", libs.androidx.room.compiler)
+}
+
+room {
+    schemaDirectory("$projectDir/schemas")
 }
 
 compose.desktop {

@@ -36,7 +36,7 @@ expect fun httpClient(
                     Napier.i(message = message, tag = "HTTP")
                 }
             }
-            level = LogLevel.INFO
+            level = LogLevel.NONE
         }
     },
 ): HttpClient
