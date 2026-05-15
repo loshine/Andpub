@@ -4,7 +4,9 @@ import io.github.loshine.andpub.domain.market.MarketPublisher
 import io.github.loshine.andpub.domain.model.AppRecord
 import io.github.loshine.andpub.domain.model.ChannelRecord
 import io.github.loshine.andpub.domain.model.MarketAppInfo
+import org.koin.core.annotation.Factory
 
+@Factory
 class FetchMarketAppInfoUseCase(
     publishers: List<MarketPublisher>,
 ) {

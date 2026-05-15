@@ -30,6 +30,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import org.koin.core.annotation.KoinViewModel
 
 data class ChannelTestUiState(
     val isLoading: Boolean = false,
@@ -62,7 +63,9 @@ data class AndpubUiState(
 
 sealed interface AndpubIntent {
     data class CreateApp(val name: String, val packageName: String) : AndpubIntent
-    data class UpdateApp(val appId: String, val name: String, val packageName: String) : AndpubIntent
+    data class UpdateApp(val appId: String, val name: String, val packageName: String) :
+        AndpubIntent
+
     data class DeleteApp(val appId: String) : AndpubIntent
     data class SelectApp(val appId: String) : AndpubIntent
     data class UpdatePublishMode(val mode: PublishMode) : AndpubIntent
@@ -75,6 +78,7 @@ sealed interface AndpubIntent {
         val credentials: Map<String, String>,
         val extraFields: Map<String, String>,
     ) : AndpubIntent
+
     data class TestChannelConfig(
         val testKey: String,
         val marketType: MarketType,
@@ -82,47 +86,57 @@ sealed interface AndpubIntent {
         val credentials: Map<String, String>,
         val extraFields: Map<String, String>,
     ) : AndpubIntent
+
     data class SyncChannel(val channel: ChannelRecord) : AndpubIntent
     data class DeleteChannel(val channelId: String) : AndpubIntent
     data class UpdateUnifiedArtifact(val draft: ArtifactDraft) : AndpubIntent
     data class UpdateChannelArtifact(val channelId: String, val draft: ArtifactDraft) : AndpubIntent
-    data class ApplyInspectionToUnified(val path: String, val inspection: ArtifactInspection) : AndpubIntent
+    data class ApplyInspectionToUnified(val path: String, val inspection: ArtifactInspection) :
+        AndpubIntent
+
     data class ApplySplitInspectionToUnified(
         val slot: SplitApkSlot,
         val path: String,
         val inspection: ArtifactInspection,
     ) : AndpubIntent
+
     data class ApplyInspectionToChannel(
         val channelId: String,
         val path: String,
         val inspection: ArtifactInspection,
     ) : AndpubIntent
+
     data class ApplySplitInspectionToChannel(
         val channelId: String,
         val slot: SplitApkSlot,
         val path: String,
         val inspection: ArtifactInspection,
     ) : AndpubIntent
+
     data class ApplyArtifactErrorToUnified(val path: String, val error: Throwable) : AndpubIntent
     data class ApplySplitArtifactErrorToUnified(
         val slot: SplitApkSlot,
         val path: String,
         val error: Throwable,
     ) : AndpubIntent
+
     data class ApplyArtifactErrorToChannel(
         val channelId: String,
         val path: String,
         val error: Throwable,
     ) : AndpubIntent
+
     data class ApplySplitArtifactErrorToChannel(
         val channelId: String,
         val slot: SplitApkSlot,
         val path: String,
         val error: Throwable,
     ) : AndpubIntent
+
     data object CreateMockPublishTasks : AndpubIntent
 }
 
+@KoinViewModel
 class AndpubViewModel(
     repository: AndpubRepository,
     private val fetchMarketAppInfo: FetchMarketAppInfoUseCase,
@@ -166,12 +180,20 @@ class AndpubViewModel(
             is AndpubIntent.UpdateUnifiedArtifact -> reduce {
                 it.copy(unifiedArtifact = intent.draft)
             }
+
             is AndpubIntent.UpdateChannelArtifact -> reduce {
                 it.copy(channelArtifacts = it.channelArtifacts + (intent.channelId to intent.draft))
             }
+
             is AndpubIntent.ApplyInspectionToUnified -> reduce {
-                it.copy(unifiedArtifact = it.unifiedArtifact.withInspection(intent.path, intent.inspection))
+                it.copy(
+                    unifiedArtifact = it.unifiedArtifact.withInspection(
+                        intent.path,
+                        intent.inspection
+                    )
+                )
             }
+
             is AndpubIntent.ApplySplitInspectionToUnified -> reduce {
                 it.copy(
                     unifiedArtifact = it.unifiedArtifact.withSplitInspection(
@@ -181,22 +203,32 @@ class AndpubViewModel(
                     )
                 )
             }
+
             is AndpubIntent.ApplyInspectionToChannel -> reduce {
                 val current = it.channelArtifacts[intent.channelId] ?: ArtifactDraft()
                 it.copy(
                     channelArtifacts = it.channelArtifacts + (
-                        intent.channelId to current.withInspection(intent.path, intent.inspection)
-                    )
+                            intent.channelId to current.withInspection(
+                                intent.path,
+                                intent.inspection
+                            )
+                            )
                 )
             }
+
             is AndpubIntent.ApplySplitInspectionToChannel -> reduce {
                 val current = it.channelArtifacts[intent.channelId] ?: ArtifactDraft()
                 it.copy(
                     channelArtifacts = it.channelArtifacts + (
-                        intent.channelId to current.withSplitInspection(intent.slot, intent.path, intent.inspection)
-                    )
+                            intent.channelId to current.withSplitInspection(
+                                intent.slot,
+                                intent.path,
+                                intent.inspection
+                            )
+                            )
                 )
             }
+
             is AndpubIntent.ApplyArtifactErrorToUnified -> reduce {
                 it.copy(
                     unifiedArtifact = it.unifiedArtifact.copy(
@@ -205,28 +237,42 @@ class AndpubViewModel(
                     )
                 )
             }
+
             is AndpubIntent.ApplySplitArtifactErrorToUnified -> reduce {
-                it.copy(unifiedArtifact = it.unifiedArtifact.withSplitError(intent.slot, intent.path, intent.error))
+                it.copy(
+                    unifiedArtifact = it.unifiedArtifact.withSplitError(
+                        intent.slot,
+                        intent.path,
+                        intent.error
+                    )
+                )
             }
+
             is AndpubIntent.ApplyArtifactErrorToChannel -> reduce {
                 val current = it.channelArtifacts[intent.channelId] ?: ArtifactDraft()
                 it.copy(
                     channelArtifacts = it.channelArtifacts + (
-                        intent.channelId to current.copy(
-                            value = intent.path,
-                            message = intent.error.message ?: "产物解析失败",
-                        )
-                    )
+                            intent.channelId to current.copy(
+                                value = intent.path,
+                                message = intent.error.message ?: "产物解析失败",
+                            )
+                            )
                 )
             }
+
             is AndpubIntent.ApplySplitArtifactErrorToChannel -> reduce {
                 val current = it.channelArtifacts[intent.channelId] ?: ArtifactDraft()
                 it.copy(
                     channelArtifacts = it.channelArtifacts + (
-                        intent.channelId to current.withSplitError(intent.slot, intent.path, intent.error)
-                    )
+                            intent.channelId to current.withSplitError(
+                                intent.slot,
+                                intent.path,
+                                intent.error
+                            )
+                            )
                 )
             }
+
             AndpubIntent.CreateMockPublishTasks -> createMockPublishTasks()
         }
     }
@@ -239,12 +285,15 @@ class AndpubViewModel(
             cleanName.isEmpty() || cleanPackageName.isEmpty() -> {
                 message.value = "应用名和包名必填"
             }
+
             !validatePackageName(cleanPackageName) -> {
                 message.value = "包名格式不正确"
             }
+
             snapshot.apps.any { it.packageName == cleanPackageName } -> {
                 message.value = "该包名已经存在"
             }
+
             else -> reduce("已添加应用") {
                 val app = AppRecord(
                     id = it.newId("app"),
@@ -267,15 +316,19 @@ class AndpubViewModel(
             cleanName.isEmpty() || cleanPackageName.isEmpty() -> {
                 message.value = "应用名和包名必填"
             }
+
             !validatePackageName(cleanPackageName) -> {
                 message.value = "包名格式不正确"
             }
+
             snapshot.apps.none { it.id == appId } -> {
                 message.value = "应用不存在"
             }
+
             snapshot.apps.any { it.id != appId && it.packageName == cleanPackageName } -> {
                 message.value = "该包名已经存在"
             }
+
             else -> reduce("已更新应用") {
                 it.copy(
                     apps = it.apps.map { app ->
@@ -343,9 +396,9 @@ class AndpubViewModel(
             val extraFields = intent.extraFields.mapValues { it.value.trim() }
             val configChanged = existing?.let {
                 it.marketType != intent.marketType ||
-                    it.marketAppId != marketAppId ||
-                    it.credentials != credentials ||
-                    it.extraFields != extraFields
+                        it.marketAppId != marketAppId ||
+                        it.credentials != credentials ||
+                        it.extraFields != extraFields
             } ?: false
             val channel = ChannelRecord(
                 id = existing?.id ?: snapshot.newId("channel"),
@@ -356,7 +409,8 @@ class AndpubViewModel(
                 credentials = credentials,
                 extraFields = extraFields,
                 appInfo = existing?.appInfo.takeUnless { configChanged },
-                syncStatus = if (configChanged) ChannelSyncStatus.NotSynced else existing?.syncStatus ?: ChannelSyncStatus.NotSynced,
+                syncStatus = if (configChanged) ChannelSyncStatus.NotSynced else existing?.syncStatus
+                    ?: ChannelSyncStatus.NotSynced,
                 lastError = null,
             )
             val channels = snapshot.channels.toMutableList()
@@ -367,7 +421,8 @@ class AndpubViewModel(
             }
             snapshot.copy(
                 channels = channels,
-                channelArtifacts = snapshot.channelArtifacts + (channel.id to (snapshot.channelArtifacts[channel.id] ?: ArtifactDraft())),
+                channelArtifacts = snapshot.channelArtifacts + (channel.id to (snapshot.channelArtifacts[channel.id]
+                    ?: ArtifactDraft())),
             )
         }
     }
@@ -429,7 +484,13 @@ class AndpubViewModel(
     private fun syncChannel(channel: ChannelRecord) {
         val app = uiState.value.apps.firstOrNull { it.id == channel.appId } ?: return
         viewModelScope.launch {
-            updateChannel(channel.copy(appInfo = null, syncStatus = ChannelSyncStatus.Syncing, lastError = null))
+            updateChannel(
+                channel.copy(
+                    appInfo = null,
+                    syncStatus = ChannelSyncStatus.Syncing,
+                    lastError = null
+                )
+            )
             val result = fetchMarketAppInfo(app, channel)
             updateState { snapshot ->
                 val latest = snapshot.channels.firstOrNull { it.id == channel.id } ?: channel
@@ -525,7 +586,10 @@ class AndpubViewModel(
         value = value + (testKey to state)
     }
 
-    private fun ArtifactDraft.withInspection(path: String, inspection: ArtifactInspection): ArtifactDraft =
+    private fun ArtifactDraft.withInspection(
+        path: String,
+        inspection: ArtifactInspection
+    ): ArtifactDraft =
         copy(
             sourceType = ArtifactSourceType.LocalFile,
             value = path,
@@ -557,6 +621,7 @@ class AndpubViewModel(
                 packageType = PackageType.SplitApk,
                 split32 = part,
             )
+
             SplitApkSlot.Arm64 -> copy(
                 sourceType = ArtifactSourceType.LocalFile,
                 packageType = PackageType.SplitApk,
@@ -583,6 +648,7 @@ class AndpubViewModel(
                 packageType = PackageType.SplitApk,
                 split32 = part,
             )
+
             SplitApkSlot.Arm64 -> copy(
                 sourceType = ArtifactSourceType.LocalFile,
                 packageType = PackageType.SplitApk,
@@ -591,7 +657,10 @@ class AndpubViewModel(
         }
     }
 
-    private fun ArtifactPart.withInspection(path: String, inspection: ArtifactInspection): ArtifactPart =
+    private fun ArtifactPart.withInspection(
+        path: String,
+        inspection: ArtifactInspection
+    ): ArtifactPart =
         copy(
             value = path,
             md5 = inspection.md5,

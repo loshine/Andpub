@@ -67,10 +67,11 @@ import io.github.loshine.andpub.presentation.AndpubIntent
 import io.github.loshine.andpub.presentation.AndpubUiState
 import io.github.loshine.andpub.presentation.AndpubViewModel
 import kotlinx.coroutines.launch
+import org.koin.compose.viewmodel.koinViewModel
 
 @Composable
 fun AndpubWorkspace(
-    viewModel: AndpubViewModel,
+    viewModel: AndpubViewModel = koinViewModel(),
 ) {
     val state by viewModel.uiState.collectAsState()
 
@@ -594,7 +595,11 @@ private fun PublishTaskCard(
                     io.github.loshine.andpub.domain.model.LogLevel.Warning -> MaterialTheme.colorScheme.primary
                     io.github.loshine.andpub.domain.model.LogLevel.Error -> MaterialTheme.colorScheme.error
                 }
-                Text("${log.level.name}: ${log.message}", color = color, style = MaterialTheme.typography.bodySmall)
+                Text(
+                    "${log.level.name}: ${log.message}",
+                    color = color,
+                    style = MaterialTheme.typography.bodySmall
+                )
             }
         }
     }
@@ -621,13 +626,23 @@ private fun ChannelSummaryCard(
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text(channel.displayTitle(), style = MaterialTheme.typography.titleMedium)
-                    Text(channel.marketType.displayName, style = MaterialTheme.typography.bodyMedium)
-                    Text("同步状态：${channel.syncStatus.displayName}", style = MaterialTheme.typography.bodySmall)
+                    Text(
+                        channel.marketType.displayName,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Text(
+                        "同步状态：${channel.syncStatus.displayName}",
+                        style = MaterialTheme.typography.bodySmall
+                    )
                     channel.marketAppId?.let {
                         Text("市场应用 ID：$it", style = MaterialTheme.typography.bodySmall)
                     }
                     channel.lastError?.let {
-                        Text("错误：$it", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                        Text(
+                            "错误：$it",
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall
+                        )
                     }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -660,7 +675,11 @@ private fun ChannelEditorDialog(
     onSave: (String?, String, MarketType, String?, Map<String, String>) -> Unit,
     onTest: (String, MarketType, String?, Map<String, String>) -> Unit,
 ) {
-    var marketType by remember(channel?.id) { mutableStateOf(channel?.marketType ?: MarketType.Huawei) }
+    var marketType by remember(channel?.id) {
+        mutableStateOf(
+            channel?.marketType ?: MarketType.Huawei
+        )
+    }
     val schema = MarketDefinitions.schemaOf(marketType)
     val credentials = remember(marketType, channel?.id) {
         mutableStateMapOf<String, String>().apply {
@@ -680,64 +699,64 @@ private fun ChannelEditorDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (channel == null) "新增渠道" else "编辑渠道") },
         text = {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(max = 560.dp)
-                .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            CapabilityText(schema.capability)
-
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 560.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                MarketType.entries.forEach { type ->
-                    FilterChip(
-                        selected = marketType == type,
-                        onClick = { marketType = type },
-                        label = { Text(type.displayName) },
-                    )
+                CapabilityText(schema.capability)
+
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    MarketType.entries.forEach { type ->
+                        FilterChip(
+                            selected = marketType == type,
+                            onClick = { marketType = type },
+                            label = { Text(type.displayName) },
+                        )
+                    }
                 }
-            }
 
-            OutlinedTextField(
-                value = channelName,
-                onValueChange = { channelName = it },
-                label = { Text("渠道名称，可选") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            OutlinedTextField(
-                value = marketAppId,
-                onValueChange = { marketAppId = it },
-                label = { Text("市场侧应用 ID，可通过接口查询后回填") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-            )
-
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                schema.credentialFields.forEach { field ->
-                    SchemaTextField(
-                        field = field,
-                        value = credentials[field.key].orEmpty(),
-                        onValueChange = { credentials[field.key] = it },
-                        modifier = Modifier.width(260.dp),
-                    )
-                }
-            }
-
-            if (testState?.info != null || testState?.error != null) {
-                ConnectionTestResult(
-                    info = testState.info,
-                    error = testState.error,
+                OutlinedTextField(
+                    value = channelName,
+                    onValueChange = { channelName = it },
+                    label = { Text("渠道名称，可选") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
                 )
+                OutlinedTextField(
+                    value = marketAppId,
+                    onValueChange = { marketAppId = it },
+                    label = { Text("市场侧应用 ID，可通过接口查询后回填") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    schema.credentialFields.forEach { field ->
+                        SchemaTextField(
+                            field = field,
+                            value = credentials[field.key].orEmpty(),
+                            onValueChange = { credentials[field.key] = it },
+                            modifier = Modifier.width(260.dp),
+                        )
+                    }
+                }
+
+                if (testState?.info != null || testState?.error != null) {
+                    ConnectionTestResult(
+                        info = testState.info,
+                        error = testState.error,
+                    )
+                }
             }
-        }
         },
         confirmButton = {
             Button(
@@ -910,13 +929,36 @@ private fun ArtifactSection(
                 onPickFile = { path, inspectionResult ->
                     inspectionResult.fold(
                         onSuccess = { onIntent(AndpubIntent.ApplyInspectionToUnified(path, it)) },
-                        onFailure = { onIntent(AndpubIntent.ApplyArtifactErrorToUnified(path, it)) },
+                        onFailure = {
+                            onIntent(
+                                AndpubIntent.ApplyArtifactErrorToUnified(
+                                    path,
+                                    it
+                                )
+                            )
+                        },
                     )
                 },
                 onPickSplitFile = { slot, path, inspectionResult ->
                     inspectionResult.fold(
-                        onSuccess = { onIntent(AndpubIntent.ApplySplitInspectionToUnified(slot, path, it)) },
-                        onFailure = { onIntent(AndpubIntent.ApplySplitArtifactErrorToUnified(slot, path, it)) },
+                        onSuccess = {
+                            onIntent(
+                                AndpubIntent.ApplySplitInspectionToUnified(
+                                    slot,
+                                    path,
+                                    it
+                                )
+                            )
+                        },
+                        onFailure = {
+                            onIntent(
+                                AndpubIntent.ApplySplitArtifactErrorToUnified(
+                                    slot,
+                                    path,
+                                    it
+                                )
+                            )
+                        },
                     )
                 },
             )
@@ -933,17 +975,58 @@ private fun ArtifactSection(
                     toolSettings = state.toolSettings,
                     allowedPackageTypes = listOf(capability).allowedPackageTypes(),
                     allowUrl = capability.supportsUserUrl,
-                    onDraftChange = { onIntent(AndpubIntent.UpdateChannelArtifact(channel.id, it)) },
+                    onDraftChange = {
+                        onIntent(
+                            AndpubIntent.UpdateChannelArtifact(
+                                channel.id,
+                                it
+                            )
+                        )
+                    },
                     onPickFile = { path, inspectionResult ->
                         inspectionResult.fold(
-                            onSuccess = { onIntent(AndpubIntent.ApplyInspectionToChannel(channel.id, path, it)) },
-                            onFailure = { onIntent(AndpubIntent.ApplyArtifactErrorToChannel(channel.id, path, it)) },
+                            onSuccess = {
+                                onIntent(
+                                    AndpubIntent.ApplyInspectionToChannel(
+                                        channel.id,
+                                        path,
+                                        it
+                                    )
+                                )
+                            },
+                            onFailure = {
+                                onIntent(
+                                    AndpubIntent.ApplyArtifactErrorToChannel(
+                                        channel.id,
+                                        path,
+                                        it
+                                    )
+                                )
+                            },
                         )
                     },
                     onPickSplitFile = { slot, path, inspectionResult ->
                         inspectionResult.fold(
-                            onSuccess = { onIntent(AndpubIntent.ApplySplitInspectionToChannel(channel.id, slot, path, it)) },
-                            onFailure = { onIntent(AndpubIntent.ApplySplitArtifactErrorToChannel(channel.id, slot, path, it)) },
+                            onSuccess = {
+                                onIntent(
+                                    AndpubIntent.ApplySplitInspectionToChannel(
+                                        channel.id,
+                                        slot,
+                                        path,
+                                        it
+                                    )
+                                )
+                            },
+                            onFailure = {
+                                onIntent(
+                                    AndpubIntent.ApplySplitArtifactErrorToChannel(
+                                        channel.id,
+                                        slot,
+                                        path,
+                                        it
+                                    )
+                                )
+                            },
                         )
                     },
                 )
@@ -996,12 +1079,12 @@ private fun ArtifactEditor(
                 }
                 sourceTypes
                     .forEach { type ->
-                    FilterChip(
-                        selected = effectiveDraft.sourceType == type,
-                        onClick = { onDraftChange(effectiveDraft.copy(sourceType = type)) },
-                        label = { Text(type.displayName) },
-                    )
-                }
+                        FilterChip(
+                            selected = effectiveDraft.sourceType == type,
+                            onClick = { onDraftChange(effectiveDraft.copy(sourceType = type)) },
+                            label = { Text(type.displayName) },
+                        )
+                    }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 PackageType.entries.filter { it in allowedPackageTypes }.forEach { type ->
@@ -1027,7 +1110,10 @@ private fun ArtifactEditor(
                 Text("当前目标渠道不支持用户 URL 拉包。", style = MaterialTheme.typography.bodySmall)
             }
             if (effectiveDraft.packageType == PackageType.SplitApk) {
-                Text("32/64 APK 当前阶段仅支持本地文件。", style = MaterialTheme.typography.bodySmall)
+                Text(
+                    "32/64 APK 当前阶段仅支持本地文件。",
+                    style = MaterialTheme.typography.bodySmall
+                )
             }
 
             if (effectiveDraft.packageType == PackageType.SplitApk) {
@@ -1200,9 +1286,18 @@ private fun ArtifactInspectionSummary(
 
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         draft.message?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-        if (draft.md5.isNotBlank()) Text("MD5：${draft.md5}", style = MaterialTheme.typography.bodySmall)
-        if (draft.sha1.isNotBlank()) Text("SHA-1：${draft.sha1}", style = MaterialTheme.typography.bodySmall)
-        if (draft.sha256.isNotBlank()) Text("SHA-256：${draft.sha256}", style = MaterialTheme.typography.bodySmall)
+        if (draft.md5.isNotBlank()) Text(
+            "MD5：${draft.md5}",
+            style = MaterialTheme.typography.bodySmall
+        )
+        if (draft.sha1.isNotBlank()) Text(
+            "SHA-1：${draft.sha1}",
+            style = MaterialTheme.typography.bodySmall
+        )
+        if (draft.sha256.isNotBlank()) Text(
+            "SHA-256：${draft.sha256}",
+            style = MaterialTheme.typography.bodySmall
+        )
         draft.packageName?.let { Text("包名：$it", style = MaterialTheme.typography.bodySmall) }
         draft.versionName?.let { Text("版本名：$it", style = MaterialTheme.typography.bodySmall) }
         draft.versionCode?.let { Text("版本号：$it", style = MaterialTheme.typography.bodySmall) }
@@ -1223,9 +1318,18 @@ private fun ArtifactPartSummary(
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text(label, style = MaterialTheme.typography.titleSmall)
         part.message?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-        if (part.md5.isNotBlank()) Text("MD5：${part.md5}", style = MaterialTheme.typography.bodySmall)
-        if (part.sha1.isNotBlank()) Text("SHA-1：${part.sha1}", style = MaterialTheme.typography.bodySmall)
-        if (part.sha256.isNotBlank()) Text("SHA-256：${part.sha256}", style = MaterialTheme.typography.bodySmall)
+        if (part.md5.isNotBlank()) Text(
+            "MD5：${part.md5}",
+            style = MaterialTheme.typography.bodySmall
+        )
+        if (part.sha1.isNotBlank()) Text(
+            "SHA-1：${part.sha1}",
+            style = MaterialTheme.typography.bodySmall
+        )
+        if (part.sha256.isNotBlank()) Text(
+            "SHA-256：${part.sha256}",
+            style = MaterialTheme.typography.bodySmall
+        )
         part.packageName?.let { Text("包名：$it", style = MaterialTheme.typography.bodySmall) }
         part.versionName?.let { Text("版本名：$it", style = MaterialTheme.typography.bodySmall) }
         part.versionCode?.let { Text("版本号：$it", style = MaterialTheme.typography.bodySmall) }

@@ -14,8 +14,8 @@ import androidx.sqlite.driver.bundled.BundledSQLiteDriver
 import io.github.loshine.andpub.domain.model.LocalStateSnapshot
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.map
-import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
 interface LocalStateStore {
@@ -98,7 +98,7 @@ class RoomLocalStateStore(
 
 class InMemoryLocalStateStore : LocalStateStore {
     private var snapshot: LocalStateSnapshot? = null
-    private val snapshots = kotlinx.coroutines.flow.MutableStateFlow<LocalStateSnapshot?>(null)
+    private val snapshots = MutableStateFlow<LocalStateSnapshot?>(null)
 
     override fun observe(): Flow<LocalStateSnapshot?> = snapshots
 
