@@ -2,9 +2,14 @@ package io.github.loshine.andpub.platform
 
 import java.security.KeyFactory
 import java.security.MessageDigest
+import java.security.PrivateKey
 import java.security.PublicKey
+import java.security.Signature
 import java.security.cert.CertificateFactory
 import java.security.interfaces.RSAPublicKey
+import java.security.spec.MGF1ParameterSpec
+import java.security.spec.PKCS8EncodedKeySpec
+import java.security.spec.PSSParameterSpec
 import java.security.spec.X509EncodedKeySpec
 import java.util.Base64
 import javax.crypto.Cipher
@@ -29,6 +34,18 @@ actual fun rsaPublicEncryptHex(publicKey: String, plain: String): String {
     return cipher.encryptByBlocks(plain.encodeToByteArray(), key.maxPkcs1PlainBlockSize()).toHex()
 }
 
+actual fun rsaPssSha256Base64Url(privateKey: String, plain: String): String {
+    val signature = Signature.getInstance("RSASSA-PSS").apply {
+        setParameter(PSSParameterSpec("SHA-256", "MGF1", MGF1ParameterSpec.SHA256, 32, 1))
+        initSign(privateKey.toRsaPrivateKey())
+        update(plain.encodeToByteArray())
+    }
+    return base64UrlNoPadding(signature.sign())
+}
+
+actual fun base64UrlNoPadding(value: ByteArray): String =
+    Base64.getUrlEncoder().withoutPadding().encodeToString(value)
+
 private fun String.toRsaPublicKey(): PublicKey {
     val derBytes = Base64.getDecoder().decode(toPemBody())
     if (contains("BEGIN CERTIFICATE")) {
@@ -39,6 +56,11 @@ private fun String.toRsaPublicKey(): PublicKey {
 
     val keySpec = X509EncodedKeySpec(derBytes)
     return KeyFactory.getInstance("RSA").generatePublic(keySpec)
+}
+
+private fun String.toRsaPrivateKey(): PrivateKey {
+    val derBytes = Base64.getDecoder().decode(toPemBody())
+    return KeyFactory.getInstance("RSA").generatePrivate(PKCS8EncodedKeySpec(derBytes))
 }
 
 private fun String.toPemBody(): String =

@@ -1,6 +1,7 @@
 package io.github.loshine.andpub.data.remote
 
 import io.github.loshine.andpub.data.remote.honor.HonorRemoteDataSource
+import io.github.loshine.andpub.data.remote.huawei.HuaweiAuthContext
 import io.github.loshine.andpub.data.remote.huawei.HuaweiRemoteDataSource
 import io.github.loshine.andpub.data.remote.oppo.OppoRemoteDataSource
 import io.github.loshine.andpub.data.remote.tencent.TencentRemoteDataSource
@@ -16,14 +17,31 @@ import java.security.KeyPairGenerator
 import java.util.Base64
 
 class MarketRemoteDataSourceContractTest : StringSpec({
+    "Huawei API Client token uses documented oauth2 token endpoint" {
+        val mock = CapturingHttpClient {
+            """{"access_token":"token","expires_in":3600,"token_type":"Bearer"}"""
+        }
+
+        val result = HuaweiRemoteDataSource(mock.client).obtainToken(
+            clientId = "cid",
+            clientSecret = "secret",
+        )
+
+        result.accessToken shouldBe "token"
+        val request = mock.requests.single()
+        request.method shouldBe HttpMethod.Post
+        request.url.encodedPath shouldBe "/oauth2/v1/token"
+        request.bodyText() shouldContain "client_credentials"
+        request.bodyText() shouldContain "client_secret"
+    }
+
     "Huawei URL submit uses documented app-submit-with-file endpoint and Bearer headers" {
         val mock = CapturingHttpClient {
             """{"ret":"{\"code\":0,\"msg\":\"ok\"}"}"""
         }
 
         val result = HuaweiRemoteDataSource(mock.client).submitAppWithFile(
-            clientId = "cid",
-            accessToken = "token",
+            auth = HuaweiAuthContext.ApiClient(clientId = "cid", accessToken = "token"),
             appId = "10001",
             body = """{"downloadUrl":"https://cdn.example.com/app.apk","requestId":"req-1"}""",
         )
@@ -36,6 +54,42 @@ class MarketRemoteDataSourceContractTest : StringSpec({
         request.headers["client_id"] shouldBe "cid"
         request.headers["Authorization"] shouldBe "Bearer token"
         request.bodyText() shouldContain "downloadUrl"
+    }
+
+    "Huawei Service Account API calls use JWT Bearer header without API client headers" {
+        val mock = CapturingHttpClient {
+            """{"ret":"{\"code\":0,\"msg\":\"ok\"}"}"""
+        }
+
+        HuaweiRemoteDataSource(mock.client).submitAppWithFile(
+            auth = HuaweiAuthContext.ServiceAccount(jwt = "header.payload.signature"),
+            appId = "10001",
+            body = """{"downloadUrl":"https://cdn.example.com/app.apk","requestId":"req-1"}""",
+        )
+
+        val request = mock.requests.single()
+        request.headers["Authorization"] shouldBe "Bearer header.payload.signature"
+        request.headers["client_id"] shouldBe null
+        request.headers["teamId"] shouldBe null
+        request.headers["oauth2Token"] shouldBe null
+    }
+
+    "Huawei OAuth Client API calls use teamId and oauth2Token headers" {
+        val mock = CapturingHttpClient {
+            """{"ret":"{\"code\":0,\"msg\":\"ok\"}"}"""
+        }
+
+        HuaweiRemoteDataSource(mock.client).submitAppWithFile(
+            auth = HuaweiAuthContext.OAuthClient(teamId = "team-1", oauth2Token = "oauth-token"),
+            appId = "10001",
+            body = """{"downloadUrl":"https://cdn.example.com/app.apk","requestId":"req-1"}""",
+        )
+
+        val request = mock.requests.single()
+        request.headers["teamId"] shouldBe "team-1"
+        request.headers["oauth2Token"] shouldBe "oauth-token"
+        request.headers["Authorization"] shouldBe null
+        request.headers["client_id"] shouldBe null
     }
 
     "Honor URL upload uses documented upload-by-url endpoint and Bearer headers" {

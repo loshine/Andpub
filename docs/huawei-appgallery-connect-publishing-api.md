@@ -94,14 +94,14 @@ Service Account JSON 凭据包含以下关键字段：
 | `iat` | 签发时间，UTC 时间戳，单位秒 |
 
 4. 将 Base64URL 编码后的 Header 和 Payload 用 `.` 拼接，使用 `private_key` 和 `SHA256withRSA/PSS` 签名，再对签名做 Base64URL 编码，得到 `header.payload.signature`。
-5. 使用凭据文件中的 `token_uri` 换取鉴权令牌。
-6. 获取令牌后访问具体 AppGallery Connect API。
+5. 得到的 `header.payload.signature` 就是 Service Account 鉴权令牌。
+6. 访问具体 AppGallery Connect API 时，将该 JWT 放入 Header：`Authorization: Bearer ${jwt}`。
 
 注意：
 
 - Service Account 私钥必须按密钥处理，不能写进仓库、日志或崩溃报告。
-- 本项目当前华为实现仍是 API 客户端方式；改造时应新增 Service Account 凭据模型，不要把 `private_key` 塞进 `clientSecret`。
-- 下文接口请求示例仍保留 API 客户端 header，等实现切到 Service Account 后再同步更新示例。
+- 本项目支持粘贴官方 `private.json`，也支持拆字段录入 `key_id`、`private_key`、`sub_account`、`token_uri`。
+- 新建华为渠道默认使用 Service Account；旧的 `client_id/client_secret` 配置按 API 客户端方式兼容读取。
 
 ### 2.2 API 客户端方式
 

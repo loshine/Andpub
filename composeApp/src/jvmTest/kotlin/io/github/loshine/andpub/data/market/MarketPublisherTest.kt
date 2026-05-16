@@ -13,8 +13,11 @@ import io.github.loshine.andpub.data.remote.huawei.HuaweiAppInfoResult
 import io.github.loshine.andpub.data.remote.huawei.HuaweiAuditInfo
 import io.github.loshine.andpub.data.remote.huawei.HuaweiLanguageInfo
 import io.github.loshine.andpub.data.remote.huawei.HuaweiPhasedReleaseInfo
+import io.github.loshine.andpub.data.remote.huawei.HuaweiAuthContext
+import io.github.loshine.andpub.data.remote.huawei.HuaweiJwtGenerator
 import io.github.loshine.andpub.data.remote.huawei.HuaweiRemoteDataSource
 import io.github.loshine.andpub.data.remote.huawei.HuaweiToken
+import io.github.loshine.andpub.domain.market.HuaweiCredentialKeys
 import io.github.loshine.andpub.data.remote.oppo.OppoAppInfo
 import io.github.loshine.andpub.data.remote.oppo.OppoAppInfoResult
 import io.github.loshine.andpub.data.remote.oppo.OppoRemoteDataSource
@@ -35,18 +38,58 @@ import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import io.mockk.coEvery
 import io.mockk.coVerify
+import io.mockk.every
 import io.mockk.mockk
 
 class MarketPublisherTest : StringSpec({
     val app = AppRecord("app-1", "Local App", "com.example.app")
 
-    "Huawei publisher follows docs: token, packageName to appId, app-info, status mapping" {
+    "Huawei publisher defaults to Service Account and sends JWT auth context" {
         val remote = mockk<HuaweiRemoteDataSource>()
-        coEvery { remote.obtainToken("cid", "secret") } returns HuaweiToken("token", 3600, "Bearer")
-        coEvery { remote.getAppIdList("cid", "token", "com.example.app") } returns HuaweiAppIdList(
+        val jwtGenerator = mockk<HuaweiJwtGenerator>()
+        val auth = HuaweiAuthContext.ServiceAccount("jwt-token")
+        every { jwtGenerator.createServiceAccountJwt(any()) } returns "jwt-token"
+        coEvery { remote.getAppIdList(auth, "com.example.app") } returns HuaweiAppIdList(
             listOf(HuaweiAppIdEntry(appId = "huawei-app-id")),
         )
-        coEvery { remote.getAppInfo("cid", "token", "huawei-app-id") } returns HuaweiAppInfoResult(
+        coEvery { remote.getAppInfo(auth, "huawei-app-id") } returns HuaweiAppInfoResult(
+            appInfo = HuaweiAppInfo(releaseState = 4, versionNumber = "1.2.3", onShelfVersionNumber = "1.2.2"),
+            auditInfo = HuaweiAuditInfo(auditOpinion = "等待人工审核", copyRightAuditResult = 0),
+            languages = listOf(HuaweiLanguageInfo(appName = "Huawei App")),
+            phasedReleaseInfo = HuaweiPhasedReleaseInfo("RELEASE"),
+        )
+
+        val info = HuaweiMarketPublisher(remote, jwtGenerator).fetchAppInfo(
+            app,
+            channel(
+                MarketType.Huawei,
+                credentials = mapOf(
+                    "serviceAccountJson" to """
+                        {
+                          "key_id": "kid",
+                          "private_key": "private-key",
+                          "sub_account": "sub",
+                          "token_uri": "https://oauth-login.cloud.huawei.com/oauth2/v3/token"
+                        }
+                    """.trimIndent(),
+                ),
+            ),
+        ).getOrThrow()
+
+        info.marketAppId shouldBe "huawei-app-id"
+        coVerify(exactly = 0) { remote.obtainToken(any(), any()) }
+        coVerify { remote.getAppIdList(auth, "com.example.app") }
+        coVerify { remote.getAppInfo(auth, "huawei-app-id") }
+    }
+
+    "Huawei publisher supports API Client auth and keeps legacy channels compatible" {
+        val remote = mockk<HuaweiRemoteDataSource>()
+        coEvery { remote.obtainToken("cid", "secret") } returns HuaweiToken("token", 3600, "Bearer")
+        val auth = HuaweiAuthContext.ApiClient(clientId = "cid", accessToken = "token")
+        coEvery { remote.getAppIdList(auth, "com.example.app") } returns HuaweiAppIdList(
+            listOf(HuaweiAppIdEntry(appId = "huawei-app-id")),
+        )
+        coEvery { remote.getAppInfo(auth, "huawei-app-id") } returns HuaweiAppInfoResult(
             appInfo = HuaweiAppInfo(releaseState = 4, versionNumber = "1.2.3", onShelfVersionNumber = "1.2.2"),
             auditInfo = HuaweiAuditInfo(auditOpinion = "等待人工审核", copyRightAuditResult = 0),
             languages = listOf(HuaweiLanguageInfo(appName = "Huawei App")),
@@ -63,7 +106,37 @@ class MarketPublisherTest : StringSpec({
         info.onlineVersion shouldBe "1.2.2"
         info.auditStatus shouldBe "审核中，等待人工审核，版权审核通过"
         info.releaseStatus shouldBe "审核中，分阶段发布中"
-        coVerify { remote.getAppIdList("cid", "token", "com.example.app") }
+        coVerify { remote.getAppIdList(auth, "com.example.app") }
+    }
+
+    "Huawei publisher supports OAuth Client auth" {
+        val remote = mockk<HuaweiRemoteDataSource>()
+        val auth = HuaweiAuthContext.OAuthClient(teamId = "team-1", oauth2Token = "oauth-token")
+        coEvery { remote.getAppIdList(auth, "com.example.app") } returns HuaweiAppIdList(
+            listOf(HuaweiAppIdEntry(appId = "huawei-app-id")),
+        )
+        coEvery { remote.getAppInfo(auth, "huawei-app-id") } returns HuaweiAppInfoResult(
+            appInfo = HuaweiAppInfo(releaseState = 0, versionNumber = "1.2.3", onShelfVersionNumber = "1.2.3"),
+            auditInfo = null,
+            languages = listOf(HuaweiLanguageInfo(appName = "Huawei App")),
+            phasedReleaseInfo = null,
+        )
+
+        val info = HuaweiMarketPublisher(remote).fetchAppInfo(
+            app,
+            channel(
+                MarketType.Huawei,
+                credentials = mapOf(
+                    HuaweiCredentialKeys.AuthMode to "oauthClient",
+                    "teamId" to "team-1",
+                    "oauth2Token" to "oauth-token",
+                ),
+            ),
+        ).getOrThrow()
+
+        info.marketAppId shouldBe "huawei-app-id"
+        coVerify(exactly = 0) { remote.obtainToken(any(), any()) }
+        coVerify { remote.getAppInfo(auth, "huawei-app-id") }
     }
 
     "Honor publisher follows docs: token, APPID, current release audit result" {

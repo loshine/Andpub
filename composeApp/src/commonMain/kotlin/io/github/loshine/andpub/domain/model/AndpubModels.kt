@@ -13,6 +13,13 @@ enum class MarketType(val displayName: String) {
 }
 
 @Serializable
+enum class HuaweiAuthMode(val displayName: String) {
+    ServiceAccount("Service Account（推荐）"),
+    ApiClient("API 客户端"),
+    OAuthClient("OAuth 客户端"),
+}
+
+@Serializable
 enum class PublishMode(val displayName: String) {
     UnifiedArtifact("统一产物"),
     PerChannelArtifact("按渠道产物"),

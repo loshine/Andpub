@@ -12,6 +12,8 @@ import io.ktor.client.request.setBody
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.contentType
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import org.koin.core.annotation.Single
 
 @Single
@@ -22,14 +24,16 @@ class HuaweiRemoteDataSource(
         clientId: String,
         clientSecret: String,
     ): HuaweiToken {
-        val response = client.post("$AUTH_BASE/api/oauth2/v1/token") {
+        val response = client.post("$AUTH_BASE/oauth2/v1/token") {
             contentType(ContentType.Application.Json)
             setBody(
-                mapOf(
-                    "grant_type" to "client_credentials",
-                    "client_id" to clientId,
-                    "client_secret" to clientSecret,
-                )
+                JsonObject(
+                    mapOf(
+                        "grant_type" to JsonPrimitive("client_credentials"),
+                        "client_id" to JsonPrimitive(clientId),
+                        "client_secret" to JsonPrimitive(clientSecret),
+                    )
+                ).toString()
             )
         }.decodeResponse<HuaweiTokenResponse>("华为Token")
         return HuaweiToken(
@@ -40,14 +44,13 @@ class HuaweiRemoteDataSource(
     }
 
     suspend fun getAppIdList(
-        clientId: String,
-        accessToken: String,
+        auth: HuaweiAuthContext,
         packageName: String,
         packageTypes: String? = null,
         pcVersionName: String? = null,
     ): HuaweiAppIdList {
         val response = client.get("$PUBLISH_BASE/appid-list") {
-            huaweiHeaders(clientId, accessToken)
+            huaweiHeaders(auth)
             url {
                 parameters.append("packageName", packageName)
                 packageTypes?.let { parameters.append("packageTypes", it) }
@@ -59,14 +62,13 @@ class HuaweiRemoteDataSource(
     }
 
     suspend fun getAppInfo(
-        clientId: String,
-        accessToken: String,
+        auth: HuaweiAuthContext,
         appId: String,
         lang: String? = null,
         releaseType: Int? = null,
     ): HuaweiAppInfoResult {
         val response = client.get("$PUBLISH_BASE/app-info") {
-            huaweiHeaders(clientId, accessToken)
+            huaweiHeaders(auth)
             url {
                 parameters.append("appId", appId)
                 lang?.let { parameters.append("lang", it) }
@@ -83,14 +85,13 @@ class HuaweiRemoteDataSource(
     }
 
     suspend fun updateAppInfo(
-        clientId: String,
-        accessToken: String,
+        auth: HuaweiAuthContext,
         appId: String,
         body: String,
         releaseType: Int? = null,
     ): HuaweiOperationResult =
         client.put("$PUBLISH_BASE/app-info") {
-            huaweiHeaders(clientId, accessToken)
+            huaweiHeaders(auth)
             contentType(ContentType.Application.Json)
             url {
                 parameters.append("appId", appId)
@@ -100,14 +101,13 @@ class HuaweiRemoteDataSource(
         }.parseHuaweiOperationResult("华为更新应用信息")
 
     suspend fun updateLanguageInfo(
-        clientId: String,
-        accessToken: String,
+        auth: HuaweiAuthContext,
         appId: String,
         body: String,
         releaseType: Int? = null,
     ): HuaweiOperationResult =
         client.put("$PUBLISH_BASE/app-language-info") {
-            huaweiHeaders(clientId, accessToken)
+            huaweiHeaders(auth)
             contentType(ContentType.Application.Json)
             url {
                 parameters.append("appId", appId)
@@ -117,14 +117,13 @@ class HuaweiRemoteDataSource(
         }.parseHuaweiOperationResult("华为更新语言信息")
 
     suspend fun deleteLanguageInfo(
-        clientId: String,
-        accessToken: String,
+        auth: HuaweiAuthContext,
         appId: String,
         lang: String,
         releaseType: Int? = null,
     ): HuaweiOperationResult =
         client.delete("$PUBLISH_BASE/app-language-info") {
-            huaweiHeaders(clientId, accessToken)
+            huaweiHeaders(auth)
             url {
                 parameters.append("appId", appId)
                 parameters.append("lang", lang)
@@ -133,14 +132,13 @@ class HuaweiRemoteDataSource(
         }.parseHuaweiOperationResult("华为删除语言信息")
 
     suspend fun updateFileInfo(
-        clientId: String,
-        accessToken: String,
+        auth: HuaweiAuthContext,
         appId: String,
         body: String,
         releaseType: Int? = null,
     ): HuaweiOperationResult =
         client.put("$PUBLISH_BASE/app-file-info") {
-            huaweiHeaders(clientId, accessToken)
+            huaweiHeaders(auth)
             contentType(ContentType.Application.Json)
             url {
                 parameters.append("appId", appId)
@@ -150,53 +148,49 @@ class HuaweiRemoteDataSource(
         }.parseHuaweiOperationResult("华为更新文件信息")
 
     suspend fun submitApp(
-        clientId: String,
-        accessToken: String,
+        auth: HuaweiAuthContext,
         appId: String,
         body: String,
     ): HuaweiOperationResult =
         client.post("$PUBLISH_BASE/app-submit") {
-            huaweiHeaders(clientId, accessToken)
+            huaweiHeaders(auth)
             contentType(ContentType.Application.Json)
             url { parameters.append("appId", appId) }
             setBody(body)
         }.parseHuaweiOperationResult("华为提交发布")
 
     suspend fun submitAppWithFile(
-        clientId: String,
-        accessToken: String,
+        auth: HuaweiAuthContext,
         appId: String,
         body: String,
     ): HuaweiOperationResult =
         client.post("$PUBLISH_BASE/app-submit-with-file") {
-            huaweiHeaders(clientId, accessToken)
+            huaweiHeaders(auth)
             contentType(ContentType.Application.Json)
             url { parameters.append("appId", appId) }
             setBody(body)
         }.parseHuaweiOperationResult("华为URL提交发布")
 
     suspend fun submitPackageByUrl(
-        clientId: String,
-        accessToken: String,
+        auth: HuaweiAuthContext,
         appId: String,
         body: String,
     ): HuaweiOperationResult =
         client.post("$PUBLISH_BASE/app-package-file/by-url") {
-            huaweiHeaders(clientId, accessToken)
+            huaweiHeaders(auth)
             contentType(ContentType.Application.Json)
             url { parameters.append("appId", appId) }
             setBody(body)
         }.parseHuaweiOperationResult("华为URL提交软件包")
 
     suspend fun getPackageList(
-        clientId: String,
-        accessToken: String,
+        auth: HuaweiAuthContext,
         appId: String,
         fromRecCount: Int = 1,
         maxReqCount: Int = 10,
     ): HuaweiOperationResult =
         client.get("$PUBLISH_BASE/package-list") {
-            huaweiHeaders(clientId, accessToken)
+            huaweiHeaders(auth)
             url {
                 parameters.append("appId", appId)
                 parameters.append("fromRecCount", fromRecCount.toString())
@@ -205,13 +199,12 @@ class HuaweiRemoteDataSource(
         }.parseHuaweiOperationResult("华为软件包列表")
 
     suspend fun getPackageCompileStatus(
-        clientId: String,
-        accessToken: String,
+        auth: HuaweiAuthContext,
         appId: String,
         pkgIds: String,
     ): HuaweiOperationResult =
         client.get("$PUBLISH_BASE/package/compile/status") {
-            huaweiHeaders(clientId, accessToken)
+            huaweiHeaders(auth)
             url {
                 parameters.append("appId", appId)
                 parameters.append("pkgIds", pkgIds)
@@ -219,14 +212,13 @@ class HuaweiRemoteDataSource(
         }.parseHuaweiOperationResult("华为AAB编译状态")
 
     suspend fun updatePhasedRelease(
-        clientId: String,
-        accessToken: String,
+        auth: HuaweiAuthContext,
         appId: String,
         body: String,
         releaseType: Int? = null,
     ): HuaweiOperationResult =
         client.put("$PUBLISH_BASE/phased-release") {
-            huaweiHeaders(clientId, accessToken)
+            huaweiHeaders(auth)
             contentType(ContentType.Application.Json)
             url {
                 parameters.append("appId", appId)
@@ -236,37 +228,43 @@ class HuaweiRemoteDataSource(
         }.parseHuaweiOperationResult("华为更新分阶段发布")
 
     suspend fun updateOnShelfTime(
-        clientId: String,
-        accessToken: String,
+        auth: HuaweiAuthContext,
         appId: String,
         body: String,
     ): HuaweiOperationResult =
         client.put("$PUBLISH_BASE/on-shelf-time") {
-            huaweiHeaders(clientId, accessToken)
+            huaweiHeaders(auth)
             contentType(ContentType.Application.Json)
             url { parameters.append("appId", appId) }
             setBody(body)
         }.parseHuaweiOperationResult("华为更新上架时间")
 
     suspend fun updateGmsProperties(
-        clientId: String,
-        accessToken: String,
+        auth: HuaweiAuthContext,
         appId: String,
         body: String,
     ): HuaweiOperationResult =
         client.put("$PUBLISH_BASE/properties/gms") {
-            huaweiHeaders(clientId, accessToken)
+            huaweiHeaders(auth)
             contentType(ContentType.Application.Json)
             url { parameters.append("appId", appId) }
             setBody(body)
         }.parseHuaweiOperationResult("华为设置GMS依赖")
 
-    private fun HttpRequestBuilder.huaweiHeaders(
-        clientId: String,
-        accessToken: String,
-    ) {
-        header("client_id", clientId)
-        header("Authorization", "Bearer $accessToken")
+    private fun HttpRequestBuilder.huaweiHeaders(auth: HuaweiAuthContext) {
+        when (auth) {
+            is HuaweiAuthContext.ApiClient -> {
+                header("client_id", auth.clientId)
+                header("Authorization", "Bearer ${auth.accessToken}")
+            }
+            is HuaweiAuthContext.OAuthClient -> {
+                header("teamId", auth.teamId)
+                header("oauth2Token", auth.oauth2Token)
+            }
+            is HuaweiAuthContext.ServiceAccount -> {
+                header("Authorization", "Bearer ${auth.jwt}")
+            }
+        }
         header(HttpHeaders.Accept, "application/json")
     }
 

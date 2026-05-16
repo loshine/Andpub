@@ -45,6 +45,9 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import io.github.loshine.andpub.domain.market.MarketDefinitions
+import io.github.loshine.andpub.domain.market.HuaweiCredentialKeys
+import io.github.loshine.andpub.domain.market.huaweiAuthMode
+import io.github.loshine.andpub.domain.market.storageValue
 import io.github.loshine.andpub.domain.model.ArtifactDraft
 import io.github.loshine.andpub.domain.model.ArtifactPart
 import io.github.loshine.andpub.domain.model.ArtifactSourceType
@@ -52,6 +55,7 @@ import io.github.loshine.andpub.domain.model.ChannelRecord
 import io.github.loshine.andpub.domain.model.ChannelSyncStatus
 import io.github.loshine.andpub.domain.model.FieldKind
 import io.github.loshine.andpub.domain.model.FieldSchema
+import io.github.loshine.andpub.domain.model.HuaweiAuthMode
 import io.github.loshine.andpub.domain.model.MarketAppInfo
 import io.github.loshine.andpub.domain.model.MarketCapability
 import io.github.loshine.andpub.domain.model.MarketType
@@ -68,6 +72,11 @@ import io.github.loshine.andpub.presentation.AndpubUiState
 import io.github.loshine.andpub.presentation.AndpubViewModel
 import kotlinx.coroutines.launch
 import org.koin.compose.viewmodel.koinViewModel
+
+private enum class HuaweiServiceAccountInputMode(val displayName: String) {
+    Json("粘贴 private.json"),
+    SplitFields("拆字段录入"),
+}
 
 @Composable
 fun AndpubWorkspace(
@@ -634,6 +643,12 @@ private fun ChannelSummaryCard(
                         "同步状态：${channel.syncStatus.displayName}",
                         style = MaterialTheme.typography.bodySmall
                     )
+                    if (channel.marketType == MarketType.Huawei) {
+                        Text(
+                            "鉴权方式：${channel.credentials.huaweiAuthMode().displayName}",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
                     channel.marketAppId?.let {
                         Text("市场应用 ID：$it", style = MaterialTheme.typography.bodySmall)
                     }
@@ -680,11 +695,29 @@ private fun ChannelEditorDialog(
             channel?.marketType ?: MarketType.Huawei
         )
     }
+    var huaweiAuthMode by remember(channel?.id) {
+        mutableStateOf(channel?.credentials?.huaweiAuthMode() ?: HuaweiAuthMode.ServiceAccount)
+    }
+    var serviceAccountInputMode by remember(channel?.id) {
+        mutableStateOf(
+            if (channel?.credentials?.get(HuaweiCredentialKeys.ServiceAccountJson).orEmpty().isNotBlank()) {
+                HuaweiServiceAccountInputMode.Json
+            } else {
+                HuaweiServiceAccountInputMode.SplitFields
+            }
+        )
+    }
     val schema = MarketDefinitions.schemaOf(marketType)
     val credentials = remember(marketType, channel?.id) {
         mutableStateMapOf<String, String>().apply {
-            schema.credentialFields.forEach { field ->
-                put(field.key, channel?.credentials?.get(field.key).orEmpty())
+            if (marketType == MarketType.Huawei) {
+                HuaweiCredentialKeys.allKeys.forEach { key ->
+                    put(key, channel?.credentials?.get(key).orEmpty())
+                }
+            } else {
+                schema.credentialFields.forEach { field ->
+                    put(field.key, channel?.credentials?.get(field.key).orEmpty())
+                }
             }
         }
     }
@@ -692,7 +725,7 @@ private fun ChannelEditorDialog(
     var marketAppId by remember(marketType, channel?.id) {
         mutableStateOf(channel?.marketAppId.orEmpty())
     }
-    val testKey = channel?.id ?: "new-${marketType.name}"
+    val testKey = channel?.id ?: "new-${marketType.name}-${if (marketType == MarketType.Huawei) huaweiAuthMode.name else "default"}"
     val testState = state.channelTests[testKey]
 
     AlertDialog(
@@ -740,13 +773,23 @@ private fun ChannelEditorDialog(
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    schema.credentialFields.forEach { field ->
-                        SchemaTextField(
-                            field = field,
-                            value = credentials[field.key].orEmpty(),
-                            onValueChange = { credentials[field.key] = it },
-                            modifier = Modifier.width(260.dp),
+                    if (marketType == MarketType.Huawei) {
+                        HuaweiCredentialFields(
+                            authMode = huaweiAuthMode,
+                            onAuthModeChange = { huaweiAuthMode = it },
+                            serviceAccountInputMode = serviceAccountInputMode,
+                            onServiceAccountInputModeChange = { serviceAccountInputMode = it },
+                            credentials = credentials,
                         )
+                    } else {
+                        schema.credentialFields.forEach { field ->
+                            SchemaTextField(
+                                field = field,
+                                value = credentials[field.key].orEmpty(),
+                                onValueChange = { credentials[field.key] = it },
+                                modifier = Modifier.width(260.dp),
+                            )
+                        }
                     }
                 }
 
@@ -766,7 +809,7 @@ private fun ChannelEditorDialog(
                         channelName,
                         marketType,
                         marketAppId,
-                        credentials.toMap(),
+                        credentials.toChannelCredentials(marketType, schema.credentialFields, huaweiAuthMode, serviceAccountInputMode),
                     )
                 },
             ) {
@@ -781,7 +824,7 @@ private fun ChannelEditorDialog(
                             testKey,
                             marketType,
                             marketAppId,
-                            credentials.toMap(),
+                            credentials.toChannelCredentials(marketType, schema.credentialFields, huaweiAuthMode, serviceAccountInputMode),
                         )
                     },
                 ) {
@@ -793,6 +836,157 @@ private fun ChannelEditorDialog(
             }
         },
     )
+}
+
+@Composable
+private fun HuaweiCredentialFields(
+    authMode: HuaweiAuthMode,
+    onAuthModeChange: (HuaweiAuthMode) -> Unit,
+    serviceAccountInputMode: HuaweiServiceAccountInputMode,
+    onServiceAccountInputModeChange: (HuaweiServiceAccountInputMode) -> Unit,
+    credentials: MutableMap<String, String>,
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            HuaweiAuthMode.entries.forEach { mode ->
+                FilterChip(
+                    selected = authMode == mode,
+                    onClick = { onAuthModeChange(mode) },
+                    label = { Text(mode.displayName) },
+                )
+            }
+        }
+
+        when (authMode) {
+            HuaweiAuthMode.ServiceAccount -> {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    HuaweiServiceAccountInputMode.entries.forEach { mode ->
+                        FilterChip(
+                            selected = serviceAccountInputMode == mode,
+                            onClick = { onServiceAccountInputModeChange(mode) },
+                            label = { Text(mode.displayName) },
+                        )
+                    }
+                }
+                when (serviceAccountInputMode) {
+                    HuaweiServiceAccountInputMode.Json ->
+                        SchemaTextField(
+                            field = FieldSchema(
+                                HuaweiCredentialKeys.ServiceAccountJson,
+                                "Service Account private.json",
+                                kind = FieldKind.Multiline,
+                            ),
+                            value = credentials[HuaweiCredentialKeys.ServiceAccountJson].orEmpty(),
+                            onValueChange = { credentials[HuaweiCredentialKeys.ServiceAccountJson] = it },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    HuaweiServiceAccountInputMode.SplitFields ->
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            listOf(
+                                FieldSchema(HuaweiCredentialKeys.KeyId, "key_id"),
+                                FieldSchema(
+                                    HuaweiCredentialKeys.PrivateKey,
+                                    "private_key",
+                                    kind = FieldKind.Multiline,
+                                ),
+                                FieldSchema(HuaweiCredentialKeys.SubAccount, "sub_account"),
+                                FieldSchema(HuaweiCredentialKeys.TokenUri, "token_uri", kind = FieldKind.Url),
+                            ).forEach { field ->
+                                SchemaTextField(
+                                    field = field,
+                                    value = credentials[field.key].orEmpty(),
+                                    onValueChange = { credentials[field.key] = it },
+                                    modifier = Modifier.width(if (field.kind == FieldKind.Multiline) 532.dp else 260.dp),
+                                )
+                            }
+                        }
+                }
+            }
+            HuaweiAuthMode.ApiClient ->
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    listOf(
+                        FieldSchema(HuaweiCredentialKeys.ClientId, "client_id"),
+                        FieldSchema(HuaweiCredentialKeys.ClientSecret, "client_secret", kind = FieldKind.Password),
+                    ).forEach { field ->
+                        SchemaTextField(
+                            field = field,
+                            value = credentials[field.key].orEmpty(),
+                            onValueChange = { credentials[field.key] = it },
+                            modifier = Modifier.width(260.dp),
+                        )
+                    }
+                }
+            HuaweiAuthMode.OAuthClient ->
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    listOf(
+                        FieldSchema(HuaweiCredentialKeys.TeamId, "teamId"),
+                        FieldSchema(HuaweiCredentialKeys.OAuth2Token, "oauth2Token", kind = FieldKind.Password),
+                    ).forEach { field ->
+                        SchemaTextField(
+                            field = field,
+                            value = credentials[field.key].orEmpty(),
+                            onValueChange = { credentials[field.key] = it },
+                            modifier = Modifier.width(260.dp),
+                        )
+                    }
+                }
+        }
+    }
+}
+
+private fun Map<String, String>.toChannelCredentials(
+    marketType: MarketType,
+    fields: List<FieldSchema>,
+    huaweiAuthMode: HuaweiAuthMode,
+    serviceAccountInputMode: HuaweiServiceAccountInputMode,
+): Map<String, String> {
+    if (marketType != MarketType.Huawei) {
+        return fields.associate { field -> field.key to get(field.key).orEmpty() }
+    }
+
+    val selected = mutableMapOf(HuaweiCredentialKeys.AuthMode to huaweiAuthMode.storageValue())
+    when (huaweiAuthMode) {
+        HuaweiAuthMode.ServiceAccount -> {
+            when (serviceAccountInputMode) {
+                HuaweiServiceAccountInputMode.Json ->
+                    selected[HuaweiCredentialKeys.ServiceAccountJson] =
+                        get(HuaweiCredentialKeys.ServiceAccountJson).orEmpty()
+                HuaweiServiceAccountInputMode.SplitFields -> {
+                    selected[HuaweiCredentialKeys.KeyId] = get(HuaweiCredentialKeys.KeyId).orEmpty()
+                    selected[HuaweiCredentialKeys.PrivateKey] = get(HuaweiCredentialKeys.PrivateKey).orEmpty()
+                    selected[HuaweiCredentialKeys.SubAccount] = get(HuaweiCredentialKeys.SubAccount).orEmpty()
+                    selected[HuaweiCredentialKeys.TokenUri] = get(HuaweiCredentialKeys.TokenUri).orEmpty()
+                }
+            }
+        }
+        HuaweiAuthMode.ApiClient -> {
+            selected[HuaweiCredentialKeys.ClientId] = get(HuaweiCredentialKeys.ClientId).orEmpty()
+            selected[HuaweiCredentialKeys.ClientSecret] = get(HuaweiCredentialKeys.ClientSecret).orEmpty()
+        }
+        HuaweiAuthMode.OAuthClient -> {
+            selected[HuaweiCredentialKeys.TeamId] = get(HuaweiCredentialKeys.TeamId).orEmpty()
+            selected[HuaweiCredentialKeys.OAuth2Token] = get(HuaweiCredentialKeys.OAuth2Token).orEmpty()
+        }
+    }
+    return selected
 }
 
 @Composable

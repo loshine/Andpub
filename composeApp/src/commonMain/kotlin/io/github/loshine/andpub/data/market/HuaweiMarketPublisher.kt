@@ -1,10 +1,17 @@
 package io.github.loshine.andpub.data.market
 
 import io.github.loshine.andpub.data.remote.huawei.HuaweiAuditInfo
+import io.github.loshine.andpub.data.remote.huawei.DefaultHuaweiJwtGenerator
+import io.github.loshine.andpub.data.remote.huawei.HuaweiAuthContext
+import io.github.loshine.andpub.data.remote.huawei.HuaweiJwtGenerator
 import io.github.loshine.andpub.data.remote.huawei.HuaweiRemoteDataSource
+import io.github.loshine.andpub.domain.market.HuaweiCredentialKeys
 import io.github.loshine.andpub.domain.market.MarketPublisher
+import io.github.loshine.andpub.domain.market.huaweiAuthMode
+import io.github.loshine.andpub.domain.market.resolveHuaweiServiceAccountCredentials
 import io.github.loshine.andpub.domain.model.AppRecord
 import io.github.loshine.andpub.domain.model.ChannelRecord
+import io.github.loshine.andpub.domain.model.HuaweiAuthMode
 import io.github.loshine.andpub.domain.model.MarketAppInfo
 import io.github.loshine.andpub.domain.model.MarketType
 import org.koin.core.annotation.Single
@@ -12,24 +19,21 @@ import org.koin.core.annotation.Single
 @Single
 class HuaweiMarketPublisher(
     private val remote: HuaweiRemoteDataSource,
+    private val jwtGenerator: HuaweiJwtGenerator = DefaultHuaweiJwtGenerator(),
 ) : MarketPublisher {
     override val marketType: MarketType = MarketType.Huawei
 
     override suspend fun fetchAppInfo(app: AppRecord, channel: ChannelRecord): Result<MarketAppInfo> =
         runCatching {
-            val clientId = channel.requiredCredential("clientId")
-            val accessToken = remote.obtainToken(
-                clientId = clientId,
-                clientSecret = channel.requiredCredential("clientSecret"),
-            ).accessToken
+            val auth = channel.huaweiAuthContext()
             val configuredAppId = channel.marketAppId
-            val appId = configuredAppId ?: fetchAppId(clientId, accessToken, app.packageName)
+            val appId = configuredAppId ?: fetchAppId(auth, app.packageName)
             val appInfoResult = runCatching {
-                remote.getAppInfo(clientId, accessToken, appId)
+                remote.getAppInfo(auth, appId)
             }.recoverCatching { error ->
-                val resolvedAppId = configuredAppId?.let { fetchAppId(clientId, accessToken, app.packageName) }
+                val resolvedAppId = configuredAppId?.let { fetchAppId(auth, app.packageName) }
                 if (resolvedAppId != null && resolvedAppId != configuredAppId) {
-                    remote.getAppInfo(clientId, accessToken, resolvedAppId)
+                    remote.getAppInfo(auth, resolvedAppId)
                 } else {
                     throw error
                 }
@@ -50,15 +54,35 @@ class HuaweiMarketPublisher(
         }
 
     private suspend fun fetchAppId(
-        clientId: String,
-        accessToken: String,
+        auth: HuaweiAuthContext,
         packageName: String,
     ): String =
-        remote.getAppIdList(clientId, accessToken, packageName)
+        remote.getAppIdList(auth, packageName)
             .appIds
             .firstOrNull()
             ?.appId
             ?: error("华为未返回 appId")
+
+    private suspend fun ChannelRecord.huaweiAuthContext(): HuaweiAuthContext =
+        when (credentials.huaweiAuthMode()) {
+            HuaweiAuthMode.ServiceAccount -> {
+                val serviceAccount = credentials.resolveHuaweiServiceAccountCredentials().getOrThrow()
+                HuaweiAuthContext.ServiceAccount(jwtGenerator.createServiceAccountJwt(serviceAccount))
+            }
+            HuaweiAuthMode.ApiClient -> {
+                val clientId = requiredCredential(HuaweiCredentialKeys.ClientId)
+                val accessToken = remote.obtainToken(
+                    clientId = clientId,
+                    clientSecret = requiredCredential(HuaweiCredentialKeys.ClientSecret),
+                ).accessToken
+                HuaweiAuthContext.ApiClient(clientId = clientId, accessToken = accessToken)
+            }
+            HuaweiAuthMode.OAuthClient ->
+                HuaweiAuthContext.OAuthClient(
+                    teamId = requiredCredential(HuaweiCredentialKeys.TeamId),
+                    oauth2Token = requiredCredential(HuaweiCredentialKeys.OAuth2Token),
+                )
+        }
 
     private fun auditStatusText(
         releaseState: Int?,
