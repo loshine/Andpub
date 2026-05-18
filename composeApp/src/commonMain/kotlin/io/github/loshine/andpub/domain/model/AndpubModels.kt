@@ -116,6 +116,28 @@ data class ChannelRecord(
 )
 
 @Serializable
+data class AppSettingsExport(
+    val schemaVersion: Int = 1,
+    val app: ExportedAppSettings,
+    val channels: List<ExportedChannelSettings>,
+)
+
+@Serializable
+data class ExportedAppSettings(
+    val name: String,
+    val packageName: String,
+)
+
+@Serializable
+data class ExportedChannelSettings(
+    val name: String,
+    val marketType: MarketType,
+    val marketAppId: String?,
+    val credentials: Map<String, String>,
+    val extraFields: Map<String, String>,
+)
+
+@Serializable
 data class MarketAppInfo(
     val marketAppId: String,
     val packageName: String,

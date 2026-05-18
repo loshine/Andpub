@@ -19,12 +19,14 @@ import io.github.loshine.andpub.domain.model.PublishTaskRecord
 import io.github.loshine.andpub.domain.model.SplitApkSlot
 import io.github.loshine.andpub.domain.model.ToolSettings
 import io.github.loshine.andpub.domain.repository.AndpubRepository
+import io.github.loshine.andpub.domain.usecase.BuildAppSettingsExportUseCase
 import io.github.loshine.andpub.domain.usecase.CreatePublishTasksUseCase
 import io.github.loshine.andpub.domain.usecase.FetchMarketAppInfoUseCase
 import io.github.loshine.andpub.domain.usecase.ObserveAndpubStateUseCase
 import io.github.loshine.andpub.domain.usecase.UpdateAndpubStateUseCase
 import io.github.loshine.andpub.domain.usecase.ValidateChannelCredentialsUseCase
 import io.github.loshine.andpub.domain.usecase.ValidatePackageNameUseCase
+import io.github.loshine.andpub.platform.saveTextFile
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -69,6 +71,7 @@ sealed interface AndpubIntent {
 
     data class DeleteApp(val appId: String) : AndpubIntent
     data class SelectApp(val appId: String) : AndpubIntent
+    data object ExportSelectedAppSettings : AndpubIntent
     data class UpdatePublishMode(val mode: PublishMode) : AndpubIntent
     data class UpdateToolSettings(val settings: ToolSettings) : AndpubIntent
     data class AddOrUpdateChannel(
@@ -146,6 +149,7 @@ class AndpubViewModel(
     private val validatePackageName: ValidatePackageNameUseCase = ValidatePackageNameUseCase(),
     private val validateChannelCredentials: ValidateChannelCredentialsUseCase = ValidateChannelCredentialsUseCase(),
     private val createPublishTasks: CreatePublishTasksUseCase = CreatePublishTasksUseCase(),
+    private val buildAppSettingsExport: BuildAppSettingsExportUseCase = BuildAppSettingsExportUseCase(),
 ) : ViewModel() {
     private val observeState = ObserveAndpubStateUseCase(repository)
     private val updateState = UpdateAndpubStateUseCase(repository)
@@ -174,6 +178,7 @@ class AndpubViewModel(
             is AndpubIntent.UpdateApp -> updateApp(intent.appId, intent.name, intent.packageName)
             is AndpubIntent.DeleteApp -> deleteApp(intent.appId)
             is AndpubIntent.SelectApp -> reduce { it.copy(selectedAppId = intent.appId) }
+            AndpubIntent.ExportSelectedAppSettings -> exportSelectedAppSettings()
             is AndpubIntent.UpdatePublishMode -> reduce { it.copy(publishMode = intent.mode) }
             is AndpubIntent.UpdateToolSettings -> updateToolSettings(intent.settings)
             is AndpubIntent.AddOrUpdateChannel -> addOrUpdateChannel(intent)
@@ -367,6 +372,30 @@ class AndpubViewModel(
                 publishTasks = it.publishTasks.filterNot { task -> task.appId == appId },
                 channelArtifacts = it.channelArtifacts.filterKeys { channelId -> channelId !in deletedChannelIds },
                 selectedAppId = apps.firstOrNull { app -> app.id != appId }?.id,
+            )
+        }
+    }
+
+    private fun exportSelectedAppSettings() {
+        val state = uiState.value
+        val app = state.selectedApp
+        if (app == null) {
+            message.value = "请先选择应用"
+            return
+        }
+        viewModelScope.launch {
+            runCatching {
+                saveTextFile(
+                    defaultFileName = buildAppSettingsExport.defaultFileName(app),
+                    content = buildAppSettingsExport(app, state.selectedChannels),
+                )
+            }.fold(
+                onSuccess = { path ->
+                    message.value = path?.let { "已导出应用设置：$it" } ?: "已取消导出"
+                },
+                onFailure = {
+                    message.value = "导出应用设置失败：${it.message ?: "未知错误"}"
+                },
             )
         }
     }

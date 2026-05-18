@@ -22,7 +22,6 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
-import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.MaterialTheme
@@ -137,6 +136,13 @@ private fun AppSidebar(
         ) {
             Text("创建应用")
         }
+        OutlinedButton(
+            onClick = { onIntent(AndpubIntent.ExportSelectedAppSettings) },
+            enabled = state.selectedApp != null,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text("导出当前应用设置")
+        }
 
         Text("应用列表", style = MaterialTheme.typography.titleMedium)
         LazyColumn(
@@ -146,8 +152,11 @@ private fun AppSidebar(
             items(state.apps, key = { it.id }) { app ->
                 val selected = state.selectedAppId == app.id
                 if (selected) {
-                    ElevatedCard(
+                    OutlinedCard(
                         onClick = { onIntent(AndpubIntent.SelectApp(app.id)) },
+                        colors = androidx.compose.material3.CardDefaults.outlinedCardColors(
+                            containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                        ),
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         AppListItem(
