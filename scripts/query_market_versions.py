@@ -394,7 +394,7 @@ class MarketVersionQuery:
         response = self.post_form(VIVO_BASE, "vivo应用详情", params)
         if response.get("code") == "10018":
             raise ValueError("vivo 当前接入信息没有 app.query.details 访问权限")
-        if response.get("code") not in (None, "0"):
+        if response.get("code") not in (None, 0, "0"):
             raise ValueError(f"vivo应用详情 code={response.get('code')}: {response.get('msg') or response.get('subMsg') or ''}")
         data = response.get("data")
         if not isinstance(data, dict):

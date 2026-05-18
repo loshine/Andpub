@@ -54,3 +54,7 @@ Package.resolved
 # Logs
 *.log
 hs_err_pid*
+
+# Python
+__pycache__/
+*.py[cod]
