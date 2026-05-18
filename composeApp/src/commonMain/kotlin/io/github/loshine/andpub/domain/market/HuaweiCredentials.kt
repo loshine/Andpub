@@ -45,13 +45,13 @@ fun Map<String, String>.huaweiAuthMode(): HuaweiAuthMode {
         "apiClient", HuaweiAuthMode.ApiClient.name -> HuaweiAuthMode.ApiClient
         "oauthClient", HuaweiAuthMode.OAuthClient.name -> HuaweiAuthMode.OAuthClient
         "" -> {
-            if (hasLegacyHuaweiApiClientCredentials()) {
-                HuaweiAuthMode.ApiClient
-            } else {
+            if (hasLegacyHuaweiServiceAccountCredentials()) {
                 HuaweiAuthMode.ServiceAccount
+            } else {
+                HuaweiAuthMode.ApiClient
             }
         }
-        else -> HuaweiAuthMode.ServiceAccount
+        else -> HuaweiAuthMode.ApiClient
     }
 }
 
@@ -99,9 +99,12 @@ fun Map<String, String>.missingHuaweiCredentialLabel(): String? =
             )
     }
 
-private fun Map<String, String>.hasLegacyHuaweiApiClientCredentials(): Boolean =
-    this[HuaweiCredentialKeys.ClientId].orEmpty().isNotBlank() ||
-            this[HuaweiCredentialKeys.ClientSecret].orEmpty().isNotBlank()
+private fun Map<String, String>.hasLegacyHuaweiServiceAccountCredentials(): Boolean =
+    this[HuaweiCredentialKeys.ServiceAccountJson].orEmpty().isNotBlank() ||
+            this[HuaweiCredentialKeys.KeyId].orEmpty().isNotBlank() ||
+            this[HuaweiCredentialKeys.PrivateKey].orEmpty().isNotBlank() ||
+            this[HuaweiCredentialKeys.SubAccount].orEmpty().isNotBlank() ||
+            this[HuaweiCredentialKeys.TokenUri].orEmpty().isNotBlank()
 
 private fun Map<String, String>.firstBlankHuaweiField(vararg fields: Pair<String, String>): String? =
     fields.firstOrNull { (key, _) -> this[key].orEmpty().isBlank() }?.second

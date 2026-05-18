@@ -80,11 +80,17 @@ internal data class HuaweiTokenResponse(
     val expiresIn: Int? = null,
     @SerialName("token_type")
     val tokenType: String? = null,
+    val ret: HuaweiRet? = null,
+    val error: String? = null,
+    @SerialName("error_description")
+    val errorDescription: String? = null,
+    val code: Int? = null,
+    val message: String? = null,
 )
 
 @Serializable
 internal data class HuaweiResponse(
-    val ret: String? = null,
+    val ret: HuaweiRet? = null,
     val appids: List<HuaweiAppIdEntry> = emptyList(),
     val appInfo: HuaweiAppInfo? = null,
     val auditInfo: HuaweiAuditInfo? = null,

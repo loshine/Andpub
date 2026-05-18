@@ -14,8 +14,8 @@ enum class MarketType(val displayName: String) {
 
 @Serializable
 enum class HuaweiAuthMode(val displayName: String) {
-    ServiceAccount("Service Account（推荐）"),
-    ApiClient("API 客户端"),
+    ApiClient("API 客户端（推荐）"),
+    ServiceAccount("Service Account"),
     OAuthClient("OAuth 客户端"),
 }
 
@@ -130,6 +130,7 @@ data class MarketAppInfo(
 data class ToolSettings(
     val androidSdkPath: String = "",
     val bundletoolPath: String = "",
+    val weComWebhookUrl: String = "",
 )
 
 @Serializable

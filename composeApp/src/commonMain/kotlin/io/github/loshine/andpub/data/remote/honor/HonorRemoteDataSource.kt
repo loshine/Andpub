@@ -70,9 +70,9 @@ class HonorRemoteDataSource(
         val response = client.get("$PUBLISH_BASE/get-app-current-release") {
             honorHeaders(token)
             url { parameters.append("appId", appId) }
-        }.decodeResponse<HonorResponse<List<HonorCurrentReleaseData>>>("荣耀最新版本状态")
+        }.decodeResponse<HonorResponse<HonorCurrentReleaseData>>("荣耀最新版本状态")
         response.requireSuccess("荣耀最新版本状态")
-        return response.data.orEmpty().firstOrNull()?.toHonorCurrentRelease()
+        return response.data?.toHonorCurrentRelease()
     }
 
     suspend fun getFileUploadUrl(
@@ -219,7 +219,7 @@ private fun HonorAppDetailData.toHonorAppDetail(): HonorAppDetail {
 private fun HonorCurrentReleaseData.toHonorCurrentRelease(): HonorCurrentRelease =
     HonorCurrentRelease(
         versionName = versionName,
-        versionCode = versionCode,
+        versionCode = versionCode?.toLongOrNull(),
         auditStatus = auditStatus,
         auditResult = auditResult,
         releaseStatus = releaseStatus,

@@ -36,8 +36,10 @@ class HuaweiRemoteDataSource(
                 ).toString()
             )
         }.decodeResponse<HuaweiTokenResponse>("华为Token")
+        response.ret.requireSuccess("华为Token")
+        response.requireSuccess()
         return HuaweiToken(
-            accessToken = response.accessToken ?: error("华为 Token 接口未返回 access_token"),
+            accessToken = response.accessToken ?: error(response.missingAccessTokenMessage()),
             expiresIn = response.expiresIn,
             tokenType = response.tokenType,
         )
@@ -269,8 +271,8 @@ class HuaweiRemoteDataSource(
     }
 
     private companion object {
-        const val AUTH_BASE = "https://connect-api.cloud.huawei.com"
-        const val PUBLISH_BASE = "$AUTH_BASE/api/publish/v2"
+        const val AUTH_BASE = "https://connect-api.cloud.huawei.com/api"
+        const val PUBLISH_BASE = "$AUTH_BASE/publish/v2"
     }
 }
 
@@ -280,12 +282,40 @@ private suspend fun io.ktor.client.statement.HttpResponse.parseHuaweiOperationRe
 }
 
 private fun HuaweiResponse.requireSuccess(marketName: String): HuaweiRet? {
-    val ret = ret?.takeIf { it.isNotBlank() }?.let {
-        decodeResponse<HuaweiRet>("$marketName ret", it)
-    }
-    val code = ret?.code ?: return ret
-    require(code == 0) {
-        "$marketName code=$code: ${ret.message.orEmpty()}"
-    }
+    ret.requireSuccess(marketName)
     return ret
 }
+
+private fun HuaweiRet?.requireSuccess(marketName: String) {
+    val code = this?.code ?: return
+    require(code == 0) {
+        "$marketName code=$code: ${message.orEmpty()}"
+    }
+}
+
+private fun HuaweiTokenResponse.missingAccessTokenMessage(): String {
+    val ret = ret ?: topLevelRet()
+    val detail = when {
+        ret?.code != null -> "code=${ret.code}: ${ret.message.orEmpty()}"
+        error != null -> listOfNotNull(error, errorDescription).joinToString(": ")
+        else -> null
+    }
+    return listOfNotNull("华为 Token 接口未返回 access_token", detail).joinToString("，")
+}
+
+private fun HuaweiTokenResponse.requireSuccess() {
+    val code = code ?: return
+    require(code == 0) {
+        "华为Token code=$code: ${huaweiErrorMessage(code, message)}"
+    }
+}
+
+private fun HuaweiTokenResponse.topLevelRet(): HuaweiRet? =
+    code?.let { HuaweiRet(code = it, message = huaweiErrorMessage(it, message)) }
+
+private fun huaweiErrorMessage(code: Int, message: String?): String =
+    when {
+        !message.isNullOrBlank() -> message
+        code == 203890688 -> "client id or secret error"
+        else -> ""
+    }

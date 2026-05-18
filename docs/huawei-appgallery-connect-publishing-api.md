@@ -49,9 +49,9 @@ https://connect-api.cloud.huawei.com
 
 ## 2. 鉴权方式
 
-官方 Getting Started 文档现在列出三种授权方式。新接入优先使用 Service Account；API 客户端和 OAuth 客户端保留为兼容或特定场景方式。实际接入选一种，别混着传。
+官方 Getting Started 文档现在列出三种授权方式。本项目默认使用 API 客户端方式，与现有 AppGallery 发布插件保持一致；Service Account 和 OAuth 客户端保留为显式可选方式。实际接入选一种，别混着传。
 
-### 2.1 Service Account 方式（推荐）
+### 2.1 Service Account 方式
 
 Service Account 用于服务器与服务器之间的接口鉴权。官方文档说明它相比 API 客户端方式更安全，并提示新创建凭据应选择 Service Account，已有 API 客户端应尽快切换。
 
@@ -101,7 +101,7 @@ Service Account JSON 凭据包含以下关键字段：
 
 - Service Account 私钥必须按密钥处理，不能写进仓库、日志或崩溃报告。
 - 本项目支持粘贴官方 `private.json`，也支持拆字段录入 `key_id`、`private_key`、`sub_account`、`token_uri`。
-- 新建华为渠道默认使用 Service Account；旧的 `client_id/client_secret` 配置按 API 客户端方式兼容读取。
+- 新建华为渠道默认使用 API 客户端；旧的 Service Account 配置按 Service Account 方式兼容读取。
 
 ### 2.2 API 客户端方式
 
@@ -117,7 +117,7 @@ API 客户端方式，所有 Publishing API 请求 Header 带：
 获取访问 API 的 Token：
 
 ```http
-POST /oauth2/v1/token HTTP/1.1
+POST /api/oauth2/v1/token HTTP/1.1
 Host: connect-api.cloud.huawei.com
 Content-Type: application/json
 

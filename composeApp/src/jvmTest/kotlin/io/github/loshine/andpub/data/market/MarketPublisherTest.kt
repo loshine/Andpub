@@ -44,7 +44,7 @@ import io.mockk.mockk
 class MarketPublisherTest : StringSpec({
     val app = AppRecord("app-1", "Local App", "com.example.app")
 
-    "Huawei publisher defaults to Service Account and sends JWT auth context" {
+    "Huawei publisher supports Service Account when selected" {
         val remote = mockk<HuaweiRemoteDataSource>()
         val jwtGenerator = mockk<HuaweiJwtGenerator>()
         val auth = HuaweiAuthContext.ServiceAccount("jwt-token")
@@ -64,6 +64,7 @@ class MarketPublisherTest : StringSpec({
             channel(
                 MarketType.Huawei,
                 credentials = mapOf(
+                    HuaweiCredentialKeys.AuthMode to "serviceAccount",
                     "serviceAccountJson" to """
                         {
                           "key_id": "kid",
@@ -82,7 +83,7 @@ class MarketPublisherTest : StringSpec({
         coVerify { remote.getAppInfo(auth, "huawei-app-id") }
     }
 
-    "Huawei publisher supports API Client auth and keeps legacy channels compatible" {
+    "Huawei publisher defaults to API Client auth and keeps legacy channels compatible" {
         val remote = mockk<HuaweiRemoteDataSource>()
         coEvery { remote.obtainToken("cid", "secret") } returns HuaweiToken("token", 3600, "Bearer")
         val auth = HuaweiAuthContext.ApiClient(clientId = "cid", accessToken = "token")

@@ -93,9 +93,8 @@ internal data class HonorAppDetailReleaseInfo(
 
 @Serializable
 internal data class HonorCurrentReleaseData(
-    @SerialName("version")
     val versionName: String? = null,
-    val versionCode: Long? = null,
+    val versionCode: String? = null,
     @SerialName("reviewStatus")
     val auditStatus: String? = null,
     val auditResult: Int? = null,

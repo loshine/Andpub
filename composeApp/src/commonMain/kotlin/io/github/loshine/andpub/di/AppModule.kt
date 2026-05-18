@@ -12,6 +12,7 @@ import io.github.loshine.andpub.data.remote.huawei.HuaweiRemoteDataSource
 import io.github.loshine.andpub.data.remote.oppo.OppoRemoteDataSource
 import io.github.loshine.andpub.data.remote.tencent.TencentRemoteDataSource
 import io.github.loshine.andpub.data.remote.vivo.VivoRemoteDataSource
+import io.github.loshine.andpub.data.remote.wecom.WeComWebhookRemoteDataSource
 import io.github.loshine.andpub.data.remote.xiaomi.XiaomiRemoteDataSource
 import io.github.loshine.andpub.data.repository.DefaultAndpubRepository
 import io.github.loshine.andpub.domain.market.MarketPublisher
@@ -35,6 +36,7 @@ val appModule = module {
     single { OppoRemoteDataSource(get()) }
     single { VivoRemoteDataSource(get()) }
     single { TencentRemoteDataSource(get()) }
+    single { WeComWebhookRemoteDataSource(get()) }
 
     single { HuaweiMarketPublisher(get()) }
     single { HonorMarketPublisher(get()) }
@@ -54,5 +56,5 @@ val appModule = module {
     }
 
     factory { FetchMarketAppInfoUseCase(get()) }
-    viewModel { AndpubViewModel(get(), get()) }
+    viewModel { AndpubViewModel(get(), get(), get()) }
 }

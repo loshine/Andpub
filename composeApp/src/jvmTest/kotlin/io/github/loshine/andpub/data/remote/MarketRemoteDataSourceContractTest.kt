@@ -6,6 +6,7 @@ import io.github.loshine.andpub.data.remote.huawei.HuaweiRemoteDataSource
 import io.github.loshine.andpub.data.remote.oppo.OppoRemoteDataSource
 import io.github.loshine.andpub.data.remote.tencent.TencentRemoteDataSource
 import io.github.loshine.andpub.data.remote.vivo.VivoRemoteDataSource
+import io.github.loshine.andpub.data.remote.wecom.WeComWebhookRemoteDataSource
 import io.github.loshine.andpub.data.remote.xiaomi.XiaomiRemoteDataSource
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.StringSpec
@@ -30,14 +31,53 @@ class MarketRemoteDataSourceContractTest : StringSpec({
         result.accessToken shouldBe "token"
         val request = mock.requests.single()
         request.method shouldBe HttpMethod.Post
-        request.url.encodedPath shouldBe "/oauth2/v1/token"
+        request.url.encodedPath shouldBe "/api/oauth2/v1/token"
         request.bodyText() shouldContain "client_credentials"
         request.bodyText() shouldContain "client_secret"
     }
 
+    "Huawei API Client token surfaces ret business errors" {
+        val mock = CapturingHttpClient {
+            """{"ret":{"code":205524993,"msg":"client token auth failed"}}"""
+        }
+
+        shouldThrow<IllegalArgumentException> {
+            HuaweiRemoteDataSource(mock.client).obtainToken(
+                clientId = "cid",
+                clientSecret = "secret",
+            )
+        }.message shouldContain "华为Token code=205524993: client token auth failed"
+    }
+
+    "Huawei API Client token surfaces oauth error fields" {
+        val mock = CapturingHttpClient {
+            """{"error":"invalid_client","error_description":"bad credentials"}"""
+        }
+
+        shouldThrow<IllegalStateException> {
+            HuaweiRemoteDataSource(mock.client).obtainToken(
+                clientId = "cid",
+                clientSecret = "secret",
+            )
+        }.message shouldContain "华为 Token 接口未返回 access_token，invalid_client: bad credentials"
+    }
+
+    "Huawei API Client token surfaces top level code errors" {
+        val mock = CapturingHttpClient {
+            """{"code":203890688}"""
+        }
+
+        shouldThrow<IllegalArgumentException> {
+            HuaweiRemoteDataSource(mock.client).obtainToken(
+                clientId = "cid",
+                clientSecret = "secret",
+            )
+        }.message shouldContain "华为Token code=203890688: client id or secret error"
+    }
+
     "Huawei URL submit uses documented app-submit-with-file endpoint and Bearer headers" {
         val mock = CapturingHttpClient {
-            """{"ret":"{\"code\":0,\"msg\":\"ok\"}"}"""
+            """{"ret":{"code":0,"msg":"ok"}}"""
         }
 
         val result = HuaweiRemoteDataSource(mock.client).submitAppWithFile(
@@ -56,9 +96,26 @@ class MarketRemoteDataSourceContractTest : StringSpec({
         request.bodyText() shouldContain "downloadUrl"
     }
 
+    "Huawei app id list parses documented object ret responses" {
+        val mock = CapturingHttpClient {
+            """{"ret":{"code":0,"msg":"success"},"appids":[{"key":"猫耳FM","value":"10227369"}]}"""
+        }
+
+        val result = HuaweiRemoteDataSource(mock.client).getAppIdList(
+            auth = HuaweiAuthContext.ApiClient(clientId = "cid", accessToken = "token"),
+            packageName = "cn.missevan",
+        )
+
+        result.appIds.single().appId shouldBe "10227369"
+        val request = mock.requests.single()
+        request.url.encodedPath shouldBe "/api/publish/v2/appid-list"
+        request.headers["client_id"] shouldBe "cid"
+        request.headers["Authorization"] shouldBe "Bearer token"
+    }
+
     "Huawei Service Account API calls use JWT Bearer header without API client headers" {
         val mock = CapturingHttpClient {
-            """{"ret":"{\"code\":0,\"msg\":\"ok\"}"}"""
+            """{"ret":{"code":0,"msg":"ok"}}"""
         }
 
         HuaweiRemoteDataSource(mock.client).submitAppWithFile(
@@ -76,7 +133,7 @@ class MarketRemoteDataSourceContractTest : StringSpec({
 
     "Huawei OAuth Client API calls use teamId and oauth2Token headers" {
         val mock = CapturingHttpClient {
-            """{"ret":"{\"code\":0,\"msg\":\"ok\"}"}"""
+            """{"ret":{"code":0,"msg":"ok"}}"""
         }
 
         HuaweiRemoteDataSource(mock.client).submitAppWithFile(
@@ -110,6 +167,56 @@ class MarketRemoteDataSourceContractTest : StringSpec({
         request.url.parameters["appId"] shouldBe "20002"
         request.headers["Authorization"] shouldBe "Bearer token"
         request.bodyText() shouldContain "fileUrl"
+    }
+
+    "Honor current release parses documented data object" {
+        val mock = CapturingHttpClient {
+            """
+            {
+              "code": 0,
+              "msg": "Success",
+              "data": {
+                "releaseId": "2052682500580466688",
+                "auditMessage": "<p>审核通过</p>",
+                "appId": 104426366,
+                "auditResult": 1,
+                "versionName": "6.6.3",
+                "versionCode": "6060340"
+              }
+            }
+            """.trimIndent()
+        }
+
+        val result = HonorRemoteDataSource(mock.client).getCurrentRelease(
+            token = "token",
+            appId = "104426366",
+        )
+
+        result?.versionName shouldBe "6.6.3"
+        result?.versionCode shouldBe 6060340
+        result?.auditResult shouldBe 1
+        val request = mock.requests.single()
+        request.url.encodedPath shouldBe "/openapi/v1/publish/get-app-current-release"
+        request.url.parameters["appId"] shouldBe "104426366"
+    }
+
+    "WeCom webhook sends markdown robot messages" {
+        val mock = CapturingHttpClient {
+            """{"errcode":0,"errmsg":"ok"}"""
+        }
+
+        val result = WeComWebhookRemoteDataSource(mock.client).sendMarkdown(
+            webhookUrl = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=robot-key",
+            content = "**应用市场版本巡检**",
+        )
+
+        result.errorCode shouldBe 0
+        val request = mock.requests.single()
+        request.method shouldBe HttpMethod.Post
+        request.url.encodedPath shouldBe "/cgi-bin/webhook/send"
+        val body = request.bodyText()
+        body shouldContain "\"msgtype\":\"markdown\""
+        body shouldContain "应用市场版本巡检"
     }
 
     "Xiaomi query signs RequestData and posts to the legacy dev query endpoint" {

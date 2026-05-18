@@ -13,6 +13,7 @@ class ValidateChannelCredentialsUseCaseTest : StringSpec({
         validate(
             MarketType.Huawei,
             mapOf(
+                HuaweiCredentialKeys.AuthMode to "serviceAccount",
                 "serviceAccountJson" to """
                     {
                       "key_id": "kid",
@@ -29,6 +30,7 @@ class ValidateChannelCredentialsUseCaseTest : StringSpec({
         validate(
             MarketType.Huawei,
             mapOf(
+                HuaweiCredentialKeys.AuthMode to "serviceAccount",
                 "keyId" to "kid",
                 "privateKey" to "private-key",
                 "subAccount" to "sub",
@@ -40,8 +42,18 @@ class ValidateChannelCredentialsUseCaseTest : StringSpec({
     "Huawei Service Account reports invalid private json" {
         validate(
             MarketType.Huawei,
-            mapOf("serviceAccountJson" to """{"key_id":"kid"}"""),
+            mapOf(
+                HuaweiCredentialKeys.AuthMode to "serviceAccount",
+                "serviceAccountJson" to """{"key_id":"kid"}""",
+            ),
         ) shouldBe "华为 AppGallery 缺少 private_key"
+    }
+
+    "Huawei defaults to API Client credentials" {
+        validate(
+            MarketType.Huawei,
+            emptyMap(),
+        ) shouldBe "华为 AppGallery 缺少 client_id"
     }
 
     "Huawei API Client validates client credentials" {

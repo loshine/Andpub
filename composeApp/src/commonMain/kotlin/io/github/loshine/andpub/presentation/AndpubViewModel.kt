@@ -2,6 +2,7 @@ package io.github.loshine.andpub.presentation
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import io.github.loshine.andpub.data.remote.wecom.WeComWebhookRemoteDataSource
 import io.github.loshine.andpub.domain.model.AppRecord
 import io.github.loshine.andpub.domain.model.ArtifactDraft
 import io.github.loshine.andpub.domain.model.ArtifactInspection
@@ -88,6 +89,7 @@ sealed interface AndpubIntent {
     ) : AndpubIntent
 
     data class SyncChannel(val channel: ChannelRecord) : AndpubIntent
+    data object SyncAllChannelsAndNotify : AndpubIntent
     data class DeleteChannel(val channelId: String) : AndpubIntent
     data class UpdateUnifiedArtifact(val draft: ArtifactDraft) : AndpubIntent
     data class UpdateChannelArtifact(val channelId: String, val draft: ArtifactDraft) : AndpubIntent
@@ -140,6 +142,7 @@ sealed interface AndpubIntent {
 class AndpubViewModel(
     repository: AndpubRepository,
     private val fetchMarketAppInfo: FetchMarketAppInfoUseCase,
+    private val weComWebhookRemote: WeComWebhookRemoteDataSource,
     private val validatePackageName: ValidatePackageNameUseCase = ValidatePackageNameUseCase(),
     private val validateChannelCredentials: ValidateChannelCredentialsUseCase = ValidateChannelCredentialsUseCase(),
     private val createPublishTasks: CreatePublishTasksUseCase = CreatePublishTasksUseCase(),
@@ -176,6 +179,7 @@ class AndpubViewModel(
             is AndpubIntent.AddOrUpdateChannel -> addOrUpdateChannel(intent)
             is AndpubIntent.TestChannelConfig -> testChannelConfig(intent)
             is AndpubIntent.SyncChannel -> syncChannel(intent.channel)
+            AndpubIntent.SyncAllChannelsAndNotify -> syncAllChannelsAndNotify()
             is AndpubIntent.DeleteChannel -> deleteChannel(intent.channelId)
             is AndpubIntent.UpdateUnifiedArtifact -> reduce {
                 it.copy(unifiedArtifact = intent.draft)
@@ -373,6 +377,7 @@ class AndpubViewModel(
                 toolSettings = settings.copy(
                     androidSdkPath = settings.androidSdkPath.trim(),
                     bundletoolPath = settings.bundletoolPath.trim(),
+                    weComWebhookUrl = settings.weComWebhookUrl.trim(),
                 )
             )
         }
@@ -484,36 +489,82 @@ class AndpubViewModel(
     private fun syncChannel(channel: ChannelRecord) {
         val app = uiState.value.apps.firstOrNull { it.id == channel.appId } ?: return
         viewModelScope.launch {
-            updateChannel(
+            syncChannelInfo(app, channel)
+            message.value = "${channel.marketType.displayName} 应用信息已刷新"
+        }
+    }
+
+    private fun syncAllChannelsAndNotify() {
+        val state = uiState.value
+        val app = state.selectedApp
+        if (app == null) {
+            message.value = "请先选择应用"
+            return
+        }
+        if (state.selectedChannels.isEmpty()) {
+            message.value = "请先添加渠道"
+            return
+        }
+
+        viewModelScope.launch {
+            message.value = "正在查询全部渠道..."
+            val syncedChannels = state.selectedChannels.map { channel ->
+                syncChannelInfo(app, channel)
+            }
+            val webhookUrl = uiState.value.toolSettings.weComWebhookUrl.trim()
+            if (webhookUrl.isEmpty()) {
+                message.value = "已查询全部渠道；未配置企业微信 WebHook，未发送通知"
+                return@launch
+            }
+
+            runCatching {
+                weComWebhookRemote.sendMarkdown(
+                    webhookUrl = webhookUrl,
+                    content = buildMarketVersionReport(app, syncedChannels),
+                )
+            }.fold(
+                onSuccess = { message.value = "已查询全部渠道并发送企业微信通知" },
+                onFailure = { message.value = "已查询全部渠道，企业微信通知失败：${it.message ?: "未知错误"}" },
+            )
+        }
+    }
+
+    private suspend fun syncChannelInfo(
+        app: AppRecord,
+        channel: ChannelRecord,
+    ): ChannelRecord {
+        updateState {
+            it.withUpdatedChannel(
                 channel.copy(
                     appInfo = null,
                     syncStatus = ChannelSyncStatus.Syncing,
-                    lastError = null
+                    lastError = null,
                 )
             )
-            val result = fetchMarketAppInfo(app, channel)
-            updateState { snapshot ->
-                val latest = snapshot.channels.firstOrNull { it.id == channel.id } ?: channel
-                val updated = result.fold(
-                    onSuccess = {
-                        latest.copy(
-                            appInfo = it,
-                            syncStatus = ChannelSyncStatus.Synced,
-                            lastError = null,
-                        )
-                    },
-                    onFailure = {
-                        latest.copy(
-                            appInfo = null,
-                            syncStatus = ChannelSyncStatus.Failed,
-                            lastError = it.message ?: "查询失败",
-                        )
-                    },
-                )
-                snapshot.withUpdatedChannel(updated)
-            }
-            message.value = "${channel.marketType.displayName} 应用信息已刷新"
         }
+        val result = fetchMarketAppInfo(app, channel)
+        var syncedChannel = channel
+        updateState { snapshot ->
+            val latest = snapshot.channels.firstOrNull { it.id == channel.id } ?: channel
+            syncedChannel = result.fold(
+                onSuccess = {
+                    latest.copy(
+                        appInfo = it,
+                        syncStatus = ChannelSyncStatus.Synced,
+                        lastError = null,
+                    )
+                },
+                onFailure = {
+                    latest.copy(
+                        appInfo = null,
+                        syncStatus = ChannelSyncStatus.Failed,
+                        lastError = it.message ?: "查询失败",
+                    )
+                },
+            )
+            snapshot.withUpdatedChannel(syncedChannel)
+        }
+        return syncedChannel
     }
 
     private fun createMockPublishTasks() {
@@ -680,3 +731,29 @@ class AndpubViewModel(
         )
 
 }
+
+private fun buildMarketVersionReport(
+    app: AppRecord,
+    channels: List<ChannelRecord>,
+): String =
+    buildString {
+        appendLine("**应用市场版本巡检**")
+        appendLine("> 应用：${app.name}")
+        appendLine("> 包名：${app.packageName}")
+        appendLine()
+        channels.forEach { channel ->
+            appendLine("**${channel.reportTitle()}**")
+            val info = channel.appInfo
+            if (info == null) {
+                appendLine("- 状态：查询失败")
+                appendLine("- 错误：${channel.lastError ?: "未知错误"}")
+            } else {
+                appendLine("- 线上版本：${info.onlineVersion ?: "-"}")
+                appendLine("- 上架状态：${info.releaseStatus ?: "其它状态"}")
+            }
+            appendLine()
+        }
+    }.trimEnd()
+
+private fun ChannelRecord.reportTitle(): String =
+    name.takeIf { it.isNotBlank() } ?: marketType.displayName

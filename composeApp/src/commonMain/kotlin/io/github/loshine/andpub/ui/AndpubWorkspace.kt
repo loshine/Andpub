@@ -377,6 +377,9 @@ private fun ToolSettingsSection(
     var bundletoolPath by remember(state.toolSettings) {
         mutableStateOf(state.toolSettings.bundletoolPath)
     }
+    var weComWebhookUrl by remember(state.toolSettings) {
+        mutableStateOf(state.toolSettings.weComWebhookUrl)
+    }
     var toolMessages by remember { mutableStateOf<List<String>>(emptyList()) }
     val scope = rememberCoroutineScope()
 
@@ -399,6 +402,7 @@ private fun ToolSettingsSection(
                         val settings = ToolSettings(
                             androidSdkPath = androidSdkPath,
                             bundletoolPath = bundletoolPath,
+                            weComWebhookUrl = weComWebhookUrl,
                         )
                         onIntent(AndpubIntent.UpdateToolSettings(settings))
                         scope.launch {
@@ -424,6 +428,14 @@ private fun ToolSettingsSection(
                 onValueChange = { bundletoolPath = it },
                 label = { Text("bundletool-all.jar 路径，用于解析 AAB") },
                 singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            OutlinedTextField(
+                value = weComWebhookUrl,
+                onValueChange = { weComWebhookUrl = it },
+                label = { Text("企业微信机器人 WebHook 地址") },
+                singleLine = true,
+                visualTransformation = PasswordVisualTransformation(),
                 modifier = Modifier.fillMaxWidth(),
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -455,6 +467,7 @@ private fun ChannelSection(
     var channelDialogId by remember(state.selectedAppId) { mutableStateOf<String?>(null) }
     var deletingChannelId by remember(state.selectedAppId) { mutableStateOf<String?>(null) }
     var infoChannelId by remember(state.selectedAppId) { mutableStateOf<String?>(null) }
+    val expandedChannels = remember(state.selectedAppId) { mutableStateMapOf<String, Boolean>() }
     val editingChannel = state.selectedChannels.firstOrNull { it.id == channelDialogId }
     val deletingChannel = state.selectedChannels.firstOrNull { it.id == deletingChannelId }
     val infoChannel = state.selectedChannels.firstOrNull { it.id == infoChannelId }
@@ -469,8 +482,13 @@ private fun ChannelSection(
                 Text("渠道管理", style = MaterialTheme.typography.titleLarge)
                 Text("渠道以独立记录保存，可按市场新增、编辑、删除，并查询市场侧应用信息。")
             }
-            Button(onClick = { channelDialogId = NEW_CHANNEL_DIALOG_ID }) {
-                Text("新增渠道")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { onIntent(AndpubIntent.SyncAllChannelsAndNotify) }) {
+                    Text("一键查询并通知")
+                }
+                Button(onClick = { channelDialogId = NEW_CHANNEL_DIALOG_ID }) {
+                    Text("新增渠道")
+                }
             }
         }
 
@@ -481,6 +499,10 @@ private fun ChannelSection(
         state.selectedChannels.forEach { channel ->
             ChannelSummaryCard(
                 channel = channel,
+                expanded = expandedChannels[channel.id] == true,
+                onToggleExpanded = {
+                    expandedChannels[channel.id] = expandedChannels[channel.id] != true
+                },
                 onEdit = { channelDialogId = channel.id },
                 onDelete = { deletingChannelId = channel.id },
                 onSync = {
@@ -617,12 +639,12 @@ private fun PublishTaskCard(
 @Composable
 private fun ChannelSummaryCard(
     channel: ChannelRecord,
+    expanded: Boolean,
+    onToggleExpanded: () -> Unit,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
     onSync: () -> Unit,
 ) {
-    val schema = MarketDefinitions.schemaOf(channel.marketType)
-
     OutlinedCard(modifier = Modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier.padding(16.dp),
@@ -633,24 +655,17 @@ private fun ChannelSummaryCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.Top,
             ) {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier.weight(1f),
+                ) {
                     Text(channel.displayTitle(), style = MaterialTheme.typography.titleMedium)
                     Text(
-                        channel.marketType.displayName,
+                        "${channel.marketType.displayName} · ${channel.syncStatus.displayName}",
                         style = MaterialTheme.typography.bodyMedium
                     )
-                    Text(
-                        "同步状态：${channel.syncStatus.displayName}",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                    if (channel.marketType == MarketType.Huawei) {
-                        Text(
-                            "鉴权方式：${channel.credentials.huaweiAuthMode().displayName}",
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                    }
-                    channel.marketAppId?.let {
-                        Text("市场应用 ID：$it", style = MaterialTheme.typography.bodySmall)
+                    channel.appInfo?.let {
+                        Text("线上版本：${it.onlineVersion ?: "-"}", style = MaterialTheme.typography.bodySmall)
                     }
                     channel.lastError?.let {
                         Text(
@@ -663,6 +678,9 @@ private fun ChannelSummaryCard(
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     TextButton(onClick = onSync) {
                         Text("获取应用信息")
+                    }
+                    TextButton(onClick = onToggleExpanded) {
+                        Text(if (expanded) "收起" else "展开")
                     }
                     TextButton(onClick = onEdit) {
                         Text("编辑")
@@ -677,8 +695,30 @@ private fun ChannelSummaryCard(
                     }
                 }
             }
-            CapabilityText(schema.capability)
+            if (expanded) {
+                ChannelExpandedContent(channel)
+            }
         }
+    }
+}
+
+@Composable
+private fun ChannelExpandedContent(
+    channel: ChannelRecord,
+) {
+    val schema = MarketDefinitions.schemaOf(channel.marketType)
+
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        if (channel.marketType == MarketType.Huawei) {
+            Text(
+                "鉴权方式：${channel.credentials.huaweiAuthMode().displayName}",
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+        channel.marketAppId?.let {
+            Text("市场应用 ID：$it", style = MaterialTheme.typography.bodySmall)
+        }
+        CapabilityText(schema.capability)
     }
 }
 
@@ -696,7 +736,7 @@ private fun ChannelEditorDialog(
         )
     }
     var huaweiAuthMode by remember(channel?.id) {
-        mutableStateOf(channel?.credentials?.huaweiAuthMode() ?: HuaweiAuthMode.ServiceAccount)
+        mutableStateOf(channel?.credentials?.huaweiAuthMode() ?: HuaweiAuthMode.ApiClient)
     }
     var serviceAccountInputMode by remember(channel?.id) {
         mutableStateOf(
