@@ -121,6 +121,7 @@ data class MarketAppInfo(
     val packageName: String,
     val appName: String,
     val onlineVersion: String?,
+    val reviewingVersion: String? = null,
     val auditStatus: String?,
     val releaseStatus: String?,
     val updatedAtText: String,

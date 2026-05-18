@@ -89,7 +89,7 @@ sealed interface AndpubIntent {
     ) : AndpubIntent
 
     data class SyncChannel(val channel: ChannelRecord) : AndpubIntent
-    data object SyncAllChannelsAndNotify : AndpubIntent
+    data class SyncAllChannels(val notify: Boolean) : AndpubIntent
     data class DeleteChannel(val channelId: String) : AndpubIntent
     data class UpdateUnifiedArtifact(val draft: ArtifactDraft) : AndpubIntent
     data class UpdateChannelArtifact(val channelId: String, val draft: ArtifactDraft) : AndpubIntent
@@ -179,7 +179,7 @@ class AndpubViewModel(
             is AndpubIntent.AddOrUpdateChannel -> addOrUpdateChannel(intent)
             is AndpubIntent.TestChannelConfig -> testChannelConfig(intent)
             is AndpubIntent.SyncChannel -> syncChannel(intent.channel)
-            AndpubIntent.SyncAllChannelsAndNotify -> syncAllChannelsAndNotify()
+            is AndpubIntent.SyncAllChannels -> syncAllChannels(intent.notify)
             is AndpubIntent.DeleteChannel -> deleteChannel(intent.channelId)
             is AndpubIntent.UpdateUnifiedArtifact -> reduce {
                 it.copy(unifiedArtifact = intent.draft)
@@ -494,7 +494,7 @@ class AndpubViewModel(
         }
     }
 
-    private fun syncAllChannelsAndNotify() {
+    private fun syncAllChannels(notify: Boolean) {
         val state = uiState.value
         val app = state.selectedApp
         if (app == null) {
@@ -510,6 +510,10 @@ class AndpubViewModel(
             message.value = "正在查询全部渠道..."
             val syncedChannels = state.selectedChannels.map { channel ->
                 syncChannelInfo(app, channel)
+            }
+            if (!notify) {
+                message.value = "已查询全部渠道"
+                return@launch
             }
             val webhookUrl = uiState.value.toolSettings.weComWebhookUrl.trim()
             if (webhookUrl.isEmpty()) {

@@ -29,6 +29,7 @@ data class VivoAppDetail(
     val versionName: String? = null,
     val status: Int? = null,
     val saleStatus: Int? = null,
+    val unPassReason: String? = null,
     val onlineStatus: Int? = null,
     val onlineType: Int? = null,
 )

@@ -27,7 +27,8 @@ class VivoMarketPublisher(
                 packageName = data.packageName ?: app.packageName,
                 appName = data.appName ?: app.name,
                 onlineVersion = data.versionName,
-                auditStatus = auditStatusText(data.status, saleStatus) ?: data.status?.toString(),
+                reviewingVersion = data.versionName,
+                auditStatus = auditStatusText(data.status, data.unPassReason),
                 releaseStatus = releaseStatusText(saleStatus, data.onlineType)
                     ?: data.saleStatus?.toString()
                     ?: data.onlineStatus?.toString(),
@@ -37,24 +38,20 @@ class VivoMarketPublisher(
 
     private fun auditStatusText(
         status: Int?,
-        saleStatus: Int?,
-    ): String? =
-        when {
-            saleStatus == 1 -> "审核通过"
-            saleStatus == 0 -> "审核通过，待上架"
-            status != null -> appStatusText(status)
-            else -> null
-        }
-
-    private fun appStatusText(status: Int): String =
-        when (status) {
-            0 -> "草稿"
-            1 -> "审核中"
-            2 -> "审核通过"
-            3 -> "审核失败"
-            4 -> "测试中"
+        unPassReason: String?,
+    ): String? {
+        val statusText = when (status) {
+            1 -> "草稿"
+            2 -> "待审核"
+            3 -> "审核通过"
+            4 -> "审核不通过"
+            5 -> "撤销审核"
+            null -> return null
             else -> "未知审核状态($status)"
         }
+        val reason = unPassReason?.takeIf { status == 4 && it.isNotBlank() }
+        return listOfNotNull(statusText, reason).joinToString("：")
+    }
 
     private fun releaseStatusText(
         saleStatus: Int?,

@@ -29,20 +29,12 @@ class XiaomiMarketPublisher(
                 packageName = info?.packageName ?: app.packageName,
                 appName = info?.appName ?: app.name,
                 onlineVersion = info?.versionName,
-                auditStatus = updateStatusText(result.updateVersion, result.updateInfo),
+                reviewingVersion = null,
+                auditStatus = "小米暂不支持获取审核状态",
                 releaseStatus = releaseStatusText(info, result.create),
                 updatedAtText = "小米 API",
             )
         }
-
-    private fun updateStatusText(
-        updateVersion: Boolean?,
-        updateInfo: Boolean?,
-    ): String =
-        listOfNotNull(
-            updateVersion?.let { if (it) "允许更新版本" else "不允许更新版本" },
-            updateInfo?.let { if (it) "允许更新资料" else "不允许更新资料" },
-        ).joinToString("，").ifBlank { "未返回更新状态" }
 
     private fun releaseStatusText(
         packageInfo: XiaomiPackageInfo?,

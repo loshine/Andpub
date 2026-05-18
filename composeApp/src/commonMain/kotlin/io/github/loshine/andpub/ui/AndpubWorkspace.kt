@@ -21,8 +21,10 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedCard
@@ -293,6 +295,29 @@ private fun AppEditorDialog(
 }
 
 @Composable
+private fun StableFilterChip(
+    selected: Boolean,
+    onClick: () -> Unit,
+    label: @Composable () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    FilterChip(
+        selected = selected,
+        onClick = onClick,
+        label = label,
+        modifier = modifier,
+        elevation = FilterChipDefaults.filterChipElevation(
+            elevation = 0.dp,
+            pressedElevation = 0.dp,
+            focusedElevation = 0.dp,
+            hoveredElevation = 0.dp,
+            draggedElevation = 0.dp,
+            disabledElevation = 0.dp,
+        ),
+    )
+}
+
+@Composable
 private fun ConfirmDeleteDialog(
     title: String,
     message: String,
@@ -467,6 +492,7 @@ private fun ChannelSection(
     var channelDialogId by remember(state.selectedAppId) { mutableStateOf<String?>(null) }
     var deletingChannelId by remember(state.selectedAppId) { mutableStateOf<String?>(null) }
     var infoChannelId by remember(state.selectedAppId) { mutableStateOf<String?>(null) }
+    var notifyAfterQuery by remember(state.selectedAppId) { mutableStateOf(false) }
     val expandedChannels = remember(state.selectedAppId) { mutableStateMapOf<String, Boolean>() }
     val editingChannel = state.selectedChannels.firstOrNull { it.id == channelDialogId }
     val deletingChannel = state.selectedChannels.firstOrNull { it.id == deletingChannelId }
@@ -483,8 +509,18 @@ private fun ChannelSection(
                 Text("渠道以独立记录保存，可按市场新增、编辑、删除，并查询市场侧应用信息。")
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = { onIntent(AndpubIntent.SyncAllChannelsAndNotify) }) {
-                    Text("一键查询并通知")
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Checkbox(
+                        checked = notifyAfterQuery,
+                        onCheckedChange = { notifyAfterQuery = it },
+                    )
+                    Text("通知")
+                }
+                OutlinedButton(onClick = { onIntent(AndpubIntent.SyncAllChannels(notifyAfterQuery)) }) {
+                    Text("一键查询")
                 }
                 Button(onClick = { channelDialogId = NEW_CHANNEL_DIALOG_ID }) {
                     Text("新增渠道")
@@ -666,6 +702,8 @@ private fun ChannelSummaryCard(
                     )
                     channel.appInfo?.let {
                         Text("线上版本：${it.onlineVersion ?: "-"}", style = MaterialTheme.typography.bodySmall)
+                        Text("正在审核版本：${it.reviewingVersion ?: "-"}", style = MaterialTheme.typography.bodySmall)
+                        Text("审核状态：${it.auditStatus ?: "-"}", style = MaterialTheme.typography.bodySmall)
                     }
                     channel.lastError?.let {
                         Text(
@@ -786,7 +824,7 @@ private fun ChannelEditorDialog(
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     MarketType.entries.forEach { type ->
-                        FilterChip(
+                        StableFilterChip(
                             selected = marketType == type,
                             onClick = { marketType = type },
                             label = { Text(type.displayName) },
@@ -895,7 +933,7 @@ private fun HuaweiCredentialFields(
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             HuaweiAuthMode.entries.forEach { mode ->
-                FilterChip(
+                StableFilterChip(
                     selected = authMode == mode,
                     onClick = { onAuthModeChange(mode) },
                     label = { Text(mode.displayName) },
@@ -910,7 +948,7 @@ private fun HuaweiCredentialFields(
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     HuaweiServiceAccountInputMode.entries.forEach { mode ->
-                        FilterChip(
+                        StableFilterChip(
                             selected = serviceAccountInputMode == mode,
                             onClick = { onServiceAccountInputModeChange(mode) },
                             label = { Text(mode.displayName) },
@@ -1041,6 +1079,7 @@ private fun ConnectionTestResult(
             Text("应用名：${info.appName}")
             Text("包名：${info.packageName}")
             Text("线上版本：${info.onlineVersion ?: "-"}")
+            Text("正在审核版本：${info.reviewingVersion ?: "-"}")
             Text("审核状态：${info.auditStatus ?: "-"}")
         }
         error?.let {
@@ -1127,6 +1166,7 @@ private fun MarketAppInfoContent(
         Text("应用名：${info.appName}")
         Text("包名：${info.packageName}")
         Text("线上版本：${info.onlineVersion ?: "-"}")
+        Text("正在审核版本：${info.reviewingVersion ?: "-"}")
         Text("审核状态：${info.auditStatus ?: "-"}")
         Text("上架状态：${info.releaseStatus ?: "-"}")
         Text("更新时间：${info.updatedAtText}")
@@ -1142,7 +1182,7 @@ private fun ArtifactSection(
         Text("阶段 3：本地产物处理", style = MaterialTheme.typography.titleLarge)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             PublishMode.entries.forEach { mode ->
-                FilterChip(
+                StableFilterChip(
                     selected = state.publishMode == mode,
                     onClick = { onIntent(AndpubIntent.UpdatePublishMode(mode)) },
                     label = { Text(mode.displayName) },
@@ -1313,7 +1353,7 @@ private fun ArtifactEditor(
                 }
                 sourceTypes
                     .forEach { type ->
-                        FilterChip(
+                        StableFilterChip(
                             selected = effectiveDraft.sourceType == type,
                             onClick = { onDraftChange(effectiveDraft.copy(sourceType = type)) },
                             label = { Text(type.displayName) },
@@ -1322,7 +1362,7 @@ private fun ArtifactEditor(
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 PackageType.entries.filter { it in allowedPackageTypes }.forEach { type ->
-                    FilterChip(
+                    StableFilterChip(
                         selected = effectiveDraft.packageType == type,
                         onClick = {
                             onDraftChange(

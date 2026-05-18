@@ -29,6 +29,7 @@ class OppoMarketPublisher(
                 packageName = data?.packageName ?: app.packageName,
                 appName = data?.appName ?: app.name,
                 onlineVersion = data?.versionName,
+                reviewingVersion = data?.versionName,
                 auditStatus = data?.auditStatusName ?: auditStatus?.let { statusText(it) },
                 releaseStatus = releaseStatus?.let { statusText(it) }
                     ?: auditStatus?.let { statusText(it) },

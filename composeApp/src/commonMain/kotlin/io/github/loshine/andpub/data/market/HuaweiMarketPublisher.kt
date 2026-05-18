@@ -46,6 +46,7 @@ class HuaweiMarketPublisher(
                 appName = appInfoResult.languages.firstNotNullOfOrNull { it.appName } ?: app.name,
                 onlineVersion = appInfo?.onShelfVersionNumber ?: appInfo?.versionNumber
                     ?: "华为接口未返回线上版本",
+                reviewingVersion = appInfo?.versionNumber,
                 auditStatus = auditStatusText(releaseState, appInfoResult.auditInfo)
                     ?: "华为接口未返回审核状态",
                 releaseStatus = releaseStatusText(releaseState, appInfoResult.phasedReleaseInfo?.state),

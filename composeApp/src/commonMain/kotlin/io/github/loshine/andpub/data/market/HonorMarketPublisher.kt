@@ -30,6 +30,7 @@ class HonorMarketPublisher(
                 packageName = detail.packageName ?: app.packageName,
                 appName = detail.appName ?: app.name,
                 onlineVersion = currentRelease?.versionName ?: detail.versionName,
+                reviewingVersion = currentRelease?.versionName,
                 auditStatus = currentRelease?.auditResult?.let { auditStatusText(it) } ?: currentRelease?.auditStatus,
                 releaseStatus = currentRelease?.releaseStatus ?: detail.versionName?.let { "已上架" },
                 updatedAtText = "荣耀 API",
