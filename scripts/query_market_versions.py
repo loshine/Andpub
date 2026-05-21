@@ -344,7 +344,7 @@ class MarketVersionQuery:
         online_version = detail.get("version_name") or self.fetch_tencent_store_version(package_name)
         return {
             "onlineVersion": online_version,
-            "reviewingVersion": detail.get("version_name") if audit_status is not None else None,
+            "reviewingVersion": "腾讯接口暂不支持获取审核中版本",
             "auditStatus": tencent_audit_status(audit_status),
             "releaseStatus": tencent_release_status(audit_status),
         }
@@ -373,7 +373,7 @@ class MarketVersionQuery:
         package_info = response.get("packageInfo") or {}
         return {
             "onlineVersion": package_info.get("versionName"),
-            "reviewingVersion": None,
+            "reviewingVersion": "小米接口暂不支持获取审核中版本",
             "auditStatus": "小米暂不支持获取审核状态",
             "releaseStatus": xiaomi_release_status(package_info or None, response.get("create")),
         }

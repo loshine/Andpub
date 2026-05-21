@@ -36,7 +36,7 @@ class TencentMarketPublisher(
                 packageName = detail.packageName ?: app.packageName,
                 appName = detail.appName ?: app.name,
                 onlineVersion = onlineVersion ?: "腾讯接口和应用宝网页均未返回线上版本",
-                reviewingVersion = auditStatus?.let { detail.versionName },
+                reviewingVersion = "腾讯接口暂不支持获取审核中版本",
                 auditStatus = auditStatus?.let { auditStatusText(it) },
                 releaseStatus = releaseStatusText(auditStatus),
                 updatedAtText = "腾讯 API",

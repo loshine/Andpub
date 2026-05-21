@@ -130,7 +130,7 @@ class MarketVersionQueryTest(unittest.TestCase):
 
             self.assertEqual(result["results"][0]["success"], True)
             self.assertEqual(result["results"][0]["onlineVersion"], "6.6.3")
-            self.assertIsNone(result["results"][0]["reviewingVersion"])
+            self.assertEqual(result["results"][0]["reviewingVersion"], "小米接口暂不支持获取审核中版本")
             self.assertEqual(result["results"][0]["auditStatus"], "小米暂不支持获取审核状态")
         finally:
             qmv.rsa_public_encrypt_hex = original_encrypt
