@@ -3,6 +3,7 @@ package io.github.loshine.andpub.domain.usecase
 import io.github.loshine.andpub.domain.market.MarketDefinitions
 import io.github.loshine.andpub.domain.model.AppRecord
 import io.github.loshine.andpub.domain.model.ArtifactDraft
+import io.github.loshine.andpub.domain.model.ArtifactInspection
 import io.github.loshine.andpub.domain.model.ArtifactPart
 import io.github.loshine.andpub.domain.model.ArtifactSourceType
 import io.github.loshine.andpub.domain.model.ChannelRecord
@@ -14,9 +15,15 @@ import io.github.loshine.andpub.domain.model.PublishMode
 import io.github.loshine.andpub.domain.model.PublishTaskLog
 import io.github.loshine.andpub.domain.model.PublishTaskRecord
 import io.github.loshine.andpub.domain.model.PublishTaskStatus
+import io.github.loshine.andpub.domain.model.ToolSettings
+import io.github.loshine.andpub.platform.downloadArtifactFromUrl
+import io.github.loshine.andpub.platform.inspectLocalArtifact
 
-class CreatePublishTasksUseCase {
-    operator fun invoke(
+class CreatePublishTasksUseCase(
+    private val downloadUrlArtifact: suspend (String) -> Result<String> = ::downloadArtifactFromUrl,
+    private val inspectArtifact: suspend (String, String, String) -> Result<ArtifactInspection> = ::inspectLocalArtifact,
+) {
+    suspend operator fun invoke(
         snapshot: LocalStateSnapshot,
         app: AppRecord,
         channels: List<ChannelRecord>,
@@ -27,14 +34,27 @@ class CreatePublishTasksUseCase {
                 PublishMode.UnifiedArtifact -> snapshot.unifiedArtifact
                 PublishMode.PerChannelArtifact -> snapshot.channelArtifacts[channel.id] ?: ArtifactDraft()
             }
-            val logs = validateArtifact(app.packageName, channel, artifact)
+            val prepared = runCatching {
+                prepareArtifact(channel, artifact, snapshot.toolSettings)
+            }.getOrElse {
+                PreparedArtifact(
+                    artifact = artifact,
+                    logs = listOf(
+                        PublishTaskLog(
+                            LogLevel.Error,
+                            "${channel.marketType.displayName} 发布任务创建失败：${it.message ?: "未知错误"}",
+                        )
+                    ),
+                )
+            }
+            val logs = prepared.logs + validateArtifact(app.packageName, channel, prepared.artifact)
             PublishTaskRecord(
                 id = "task-${nextId++}",
                 appId = app.id,
                 channelId = channel.id,
                 marketType = channel.marketType,
                 publishMode = snapshot.publishMode,
-                artifact = artifact,
+                artifact = prepared.artifact,
                 status = if (logs.any { it.level == LogLevel.Error }) {
                     PublishTaskStatus.Failed
                 } else {
@@ -43,6 +63,203 @@ class CreatePublishTasksUseCase {
                 logs = logs,
             )
         }
+    }
+
+    private suspend fun prepareArtifact(
+        channel: ChannelRecord,
+        artifact: ArtifactDraft,
+        toolSettings: ToolSettings,
+    ): PreparedArtifact {
+        val capability = MarketDefinitions.schemaOf(channel.marketType).capability
+        if (
+            artifact.sourceType != ArtifactSourceType.Url ||
+            !artifact.packageType.isSupportedBy(capability)
+        ) {
+            return PreparedArtifact(artifact)
+        }
+        if (artifact.packageType == PackageType.SplitApk) {
+            return prepareSplitUrlArtifact(channel, artifact, capability, toolSettings)
+        }
+        if (!artifact.value.isHttpUrl()) {
+            return PreparedArtifact(artifact)
+        }
+
+        val originalUrl = artifact.value
+        val downloadResult = downloadUrlArtifact(originalUrl)
+        val localPath = downloadResult.getOrElse {
+            return PreparedArtifact(
+                artifact = artifact,
+                logs = listOf(
+                    PublishTaskLog(
+                        LogLevel.Error,
+                        "${channel.marketType.displayName} URL 产物下载检查失败：${it.message ?: "未知错误"}",
+                    )
+                ),
+            )
+        }
+
+        val inspected = inspectArtifact(
+            localPath,
+            toolSettings.androidSdkPath,
+            toolSettings.bundletoolPath,
+        ).requireManifest("URL 产物")
+        return inspected.fold(
+            onSuccess = {
+                val uploadByUrl = capability.supportsUserUrl
+                PreparedArtifact(
+                    artifact = if (uploadByUrl) {
+                        artifact.withUrlInspection(originalUrl, localPath, it)
+                    } else {
+                        artifact.withDownloadedInspection(localPath, it)
+                    },
+                    logs = listOf(
+                        PublishTaskLog(
+                            LogLevel.Info,
+                            if (uploadByUrl) {
+                                "${channel.marketType.displayName} URL 产物已下载并检查，后续将直接提交 URL"
+                            } else {
+                                "${channel.marketType.displayName} 不支持 URL 直传，已下载并检查后按本地文件上传"
+                            },
+                        )
+                    ),
+                )
+            },
+            onFailure = {
+                val uploadByUrl = capability.supportsUserUrl
+                PreparedArtifact(
+                    artifact = if (uploadByUrl) {
+                        artifact.copy(
+                            downloadedPath = localPath,
+                            message = "URL 已下载，产物解析失败：${it.message ?: "未知错误"}",
+                        )
+                    } else {
+                        artifact.copy(
+                            sourceType = ArtifactSourceType.LocalFile,
+                            value = localPath,
+                            downloadedPath = localPath,
+                            message = "URL 已下载，产物解析失败：${it.message ?: "未知错误"}",
+                        )
+                    },
+                    logs = listOf(
+                        PublishTaskLog(
+                            LogLevel.Error,
+                            "${channel.marketType.displayName} URL 产物已下载但检查失败：${it.message ?: "未知错误"}",
+                        )
+                    ),
+                )
+            },
+        )
+    }
+
+    private suspend fun prepareSplitUrlArtifact(
+        channel: ChannelRecord,
+        artifact: ArtifactDraft,
+        capability: MarketCapability,
+        toolSettings: ToolSettings,
+    ): PreparedArtifact {
+        if (!artifact.split32.value.isHttpUrl() || !artifact.split64.value.isHttpUrl()) {
+            return PreparedArtifact(artifact)
+        }
+
+        val downloaded32 = downloadSplitPart(
+            channel = channel,
+            slotName = "32 位 APK",
+            part = artifact.split32,
+            uploadByUrl = capability.supportsUserUrl,
+            toolSettings = toolSettings,
+        )
+        val downloaded64 = downloadSplitPart(
+            channel = channel,
+            slotName = "64 位 APK",
+            part = artifact.split64,
+            uploadByUrl = capability.supportsUserUrl,
+            toolSettings = toolSettings,
+        )
+        val logs = downloaded32.logs + downloaded64.logs
+        if (logs.any { it.level == LogLevel.Error }) {
+            return PreparedArtifact(artifact, logs)
+        }
+        return PreparedArtifact(
+            artifact = artifact.copy(
+                sourceType = if (capability.supportsUserUrl) ArtifactSourceType.Url else ArtifactSourceType.LocalFile,
+                split32 = downloaded32.part,
+                split64 = downloaded64.part,
+            ),
+            logs = logs,
+        )
+    }
+
+    private suspend fun downloadSplitPart(
+        channel: ChannelRecord,
+        slotName: String,
+        part: ArtifactPart,
+        uploadByUrl: Boolean,
+        toolSettings: ToolSettings,
+    ): PreparedSplitPart {
+        if (!part.value.isHttpUrl()) {
+            return PreparedSplitPart(part)
+        }
+
+        val originalUrl = part.value
+        val localPath = downloadUrlArtifact(originalUrl).getOrElse {
+            return PreparedSplitPart(
+                part = part,
+                logs = listOf(
+                    PublishTaskLog(
+                        LogLevel.Error,
+                        "${channel.marketType.displayName} $slotName URL 下载检查失败：${it.message ?: "未知错误"}",
+                    )
+                ),
+            )
+        }
+        val inspected = inspectArtifact(
+            localPath,
+            toolSettings.androidSdkPath,
+            toolSettings.bundletoolPath,
+        ).requireManifest(slotName)
+        return inspected.fold(
+            onSuccess = {
+                PreparedSplitPart(
+                    part = if (uploadByUrl) {
+                        part.withUrlInspection(originalUrl, localPath, it)
+                    } else {
+                        ArtifactPart().withDownloadedInspection(localPath, it)
+                    },
+                    logs = listOf(
+                        PublishTaskLog(
+                            LogLevel.Info,
+                            if (uploadByUrl) {
+                                "${channel.marketType.displayName} $slotName URL 已下载并检查，后续将直接提交 URL"
+                            } else {
+                                "${channel.marketType.displayName} 不支持 URL 直传，$slotName 已下载并检查后按本地文件上传"
+                            },
+                        )
+                    ),
+                )
+            },
+            onFailure = {
+                PreparedSplitPart(
+                    part = if (uploadByUrl) {
+                        part.copy(
+                            downloadedPath = localPath,
+                            message = "URL 已下载，产物解析失败：${it.message ?: "未知错误"}",
+                        )
+                    } else {
+                        part.copy(
+                            value = localPath,
+                            downloadedPath = localPath,
+                            message = "URL 已下载，产物解析失败：${it.message ?: "未知错误"}",
+                        )
+                    },
+                    logs = listOf(
+                        PublishTaskLog(
+                            LogLevel.Error,
+                            "${channel.marketType.displayName} $slotName URL 已下载但检查失败：${it.message ?: "未知错误"}",
+                        )
+                    ),
+                )
+            },
+        )
     }
 
     private fun validateArtifact(
@@ -66,14 +283,16 @@ class CreatePublishTasksUseCase {
             logs += PublishTaskLog(LogLevel.Error, "缺少产物文件或 URL")
         }
         if (artifact.sourceType == ArtifactSourceType.Url) {
-            val urlValid = artifact.value.startsWith("http://") || artifact.value.startsWith("https://")
+            val urlValid = artifact.value.isHttpUrl()
             if (!urlValid) {
                 logs += PublishTaskLog(LogLevel.Error, "URL 格式不正确")
             }
-            if (!capability.supportsUserUrl) {
-                logs += PublishTaskLog(LogLevel.Error, "${channel.marketType.displayName} 不支持用户 URL 拉包")
+            if (urlValid && capability.supportsUserUrl) {
+                logs += PublishTaskLog(LogLevel.Info, "${channel.marketType.displayName} 支持 URL 拉包，将直接提交 URL")
             }
-            logs += PublishTaskLog(LogLevel.Warning, "URL 产物无法在本地完整解析包名和版本，请确认 hash 与市场解析结果")
+            if (artifact.packageName == null) {
+                logs += PublishTaskLog(LogLevel.Warning, "URL 产物未读取到 manifest 信息，无法校验包名和版本")
+            }
         }
         if (artifact.packageName != null && artifact.packageName != packageName) {
             logs += PublishTaskLog(LogLevel.Error, "产物包名 ${artifact.packageName} 与应用包名 $packageName 不一致")
@@ -93,7 +312,13 @@ class CreatePublishTasksUseCase {
     ): List<PublishTaskLog> {
         val logs = mutableListOf<PublishTaskLog>()
         if (artifact.sourceType == ArtifactSourceType.Url) {
-            logs += PublishTaskLog(LogLevel.Error, "32/64 APK 当前阶段仅支持本地文件")
+            if (!artifact.split32.value.isHttpUrl()) {
+                logs += PublishTaskLog(LogLevel.Error, "32 位 APK URL 格式不正确")
+            }
+            if (!artifact.split64.value.isHttpUrl()) {
+                logs += PublishTaskLog(LogLevel.Error, "64 位 APK URL 格式不正确")
+            }
+            logs += PublishTaskLog(LogLevel.Info, "32/64 APK URL 产物已下载检查，将按渠道能力直传或使用本地文件上传")
         }
         logs += validateSplitPart("32 位 APK", packageName, artifact.split32)
         logs += validateSplitPart("64 位 APK", packageName, artifact.split64)
@@ -140,10 +365,133 @@ class CreatePublishTasksUseCase {
             PackageType.Aab -> capability.supportsAab
         }
 
+    private fun ArtifactDraft.withDownloadedInspection(
+        path: String,
+        inspection: ArtifactInspection,
+    ): ArtifactDraft =
+        copy(
+            sourceType = ArtifactSourceType.LocalFile,
+            value = path,
+            downloadedPath = path,
+            md5 = inspection.md5,
+            sha1 = inspection.sha1,
+            sha256 = inspection.sha256,
+            packageName = inspection.packageName,
+            versionName = inspection.versionName,
+            versionCode = inspection.versionCode,
+            abiList = inspection.abiList,
+            message = buildString {
+                append("URL 已下载为 ${inspection.fileName}，${inspection.fileSizeBytes} bytes")
+                if (inspection.warnings.isNotEmpty()) {
+                    append("；")
+                    append(inspection.warnings.joinToString("；"))
+                }
+            },
+        )
+
+    private fun ArtifactDraft.withUrlInspection(
+        url: String,
+        downloadedPath: String,
+        inspection: ArtifactInspection,
+    ): ArtifactDraft =
+        copy(
+            sourceType = ArtifactSourceType.Url,
+            value = url,
+            downloadedPath = downloadedPath,
+            md5 = inspection.md5,
+            sha1 = inspection.sha1,
+            sha256 = inspection.sha256,
+            packageName = inspection.packageName,
+            versionName = inspection.versionName,
+            versionCode = inspection.versionCode,
+            abiList = inspection.abiList,
+            message = buildString {
+                append("URL 已下载检查 ${inspection.fileName}，${inspection.fileSizeBytes} bytes")
+                if (inspection.warnings.isNotEmpty()) {
+                    append("；")
+                    append(inspection.warnings.joinToString("；"))
+                }
+            },
+        )
+
+    private fun ArtifactPart.withDownloadedInspection(
+        path: String,
+        inspection: ArtifactInspection,
+    ): ArtifactPart =
+        copy(
+            value = path,
+            downloadedPath = path,
+            md5 = inspection.md5,
+            sha1 = inspection.sha1,
+            sha256 = inspection.sha256,
+            packageName = inspection.packageName,
+            versionName = inspection.versionName,
+            versionCode = inspection.versionCode,
+            abiList = inspection.abiList,
+            message = buildString {
+                append("URL 已下载为 ${inspection.fileName}，${inspection.fileSizeBytes} bytes")
+                if (inspection.warnings.isNotEmpty()) {
+                    append("；")
+                    append(inspection.warnings.joinToString("；"))
+                }
+            },
+        )
+
+    private fun ArtifactPart.withUrlInspection(
+        url: String,
+        downloadedPath: String,
+        inspection: ArtifactInspection,
+    ): ArtifactPart =
+        copy(
+            value = url,
+            downloadedPath = downloadedPath,
+            md5 = inspection.md5,
+            sha1 = inspection.sha1,
+            sha256 = inspection.sha256,
+            packageName = inspection.packageName,
+            versionName = inspection.versionName,
+            versionCode = inspection.versionCode,
+            abiList = inspection.abiList,
+            message = buildString {
+                append("URL 已下载检查 ${inspection.fileName}，${inspection.fileSizeBytes} bytes")
+                if (inspection.warnings.isNotEmpty()) {
+                    append("；")
+                    append(inspection.warnings.joinToString("；"))
+                }
+            },
+        )
+
+    private fun Result<ArtifactInspection>.requireManifest(label: String): Result<ArtifactInspection> =
+        fold(
+            onSuccess = { inspection ->
+                if (inspection.packageName != null) {
+                    Result.success(inspection)
+                } else {
+                    val reason = inspection.warnings.joinToString("；")
+                        .ifBlank { "未读取到 manifest 包名，无法校验包名和版本" }
+                    Result.failure(IllegalStateException("$label 检查失败：$reason"))
+                }
+            },
+            onFailure = { Result.failure(it) },
+        )
+
+    private fun String.isHttpUrl(): Boolean =
+        startsWith("http://") || startsWith("https://")
+
     private fun LocalStateSnapshot.nextAvailableId(): Int {
         val ids = apps.map { it.id } + channels.map { it.id } + publishTasks.map { it.id }
         return ids.maxOfOrNull { id ->
             id.substringAfterLast("-").toIntOrNull() ?: 0
         }?.plus(1) ?: 1
     }
+
+    private data class PreparedArtifact(
+        val artifact: ArtifactDraft,
+        val logs: List<PublishTaskLog> = emptyList(),
+    )
+
+    private data class PreparedSplitPart(
+        val part: ArtifactPart,
+        val logs: List<PublishTaskLog> = emptyList(),
+    )
 }

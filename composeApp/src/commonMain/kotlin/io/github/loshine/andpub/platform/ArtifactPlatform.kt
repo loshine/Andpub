@@ -15,3 +15,5 @@ expect suspend fun inspectLocalArtifact(
     androidSdkPath: String,
     bundletoolPath: String,
 ): Result<ArtifactInspection>
+
+expect suspend fun downloadArtifactFromUrl(url: String): Result<String>

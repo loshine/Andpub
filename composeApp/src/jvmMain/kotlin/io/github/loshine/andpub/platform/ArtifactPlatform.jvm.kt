@@ -3,6 +3,8 @@ package io.github.loshine.andpub.platform
 import io.github.loshine.andpub.domain.model.ArtifactInspection
 import io.github.loshine.andpub.domain.model.ToolStatus
 import java.io.File
+import java.net.HttpURLConnection
+import java.net.URI
 import java.security.MessageDigest
 import java.util.zip.ZipFile
 import javax.swing.JFileChooser
@@ -79,6 +81,32 @@ actual suspend fun inspectLocalArtifact(
                 abiList = metadata.abiList.ifEmpty { file.readAbiList() },
                 warnings = metadata.warnings,
             )
+        }
+    }
+
+actual suspend fun downloadArtifactFromUrl(url: String): Result<String> =
+    runCatching {
+        withContext(Dispatchers.IO) {
+            val uri = URI(url)
+            require(uri.scheme == "http" || uri.scheme == "https") { "URL 仅支持 http/https" }
+            val target = createDownloadedArtifactFile(uri)
+            val connection = uri.toURL().openConnection().apply {
+                connectTimeout = 15_000
+                readTimeout = 120_000
+            }
+            if (connection is HttpURLConnection) {
+                connection.instanceFollowRedirects = true
+                require(connection.responseCode in 200..299) {
+                    "下载失败，HTTP ${connection.responseCode}"
+                }
+            }
+            connection.getInputStream().use { input ->
+                target.outputStream().use { output ->
+                    input.copyTo(output)
+                }
+            }
+            require(target.length() > 0) { "下载到的文件为空" }
+            target.absolutePath
         }
     }
 
@@ -161,6 +189,19 @@ private fun findAapt2(configuredSdkPath: String): File? {
                 ?.firstOrNull { it.isFile && it.canExecute() }
         }
         .firstOrNull()
+}
+
+private fun createDownloadedArtifactFile(uri: URI): File {
+    val path = uri.path.orEmpty()
+    val suffix = when {
+        path.endsWith(".apk", ignoreCase = true) -> ".apk"
+        path.endsWith(".aab", ignoreCase = true) -> ".aab"
+        else -> ".bin"
+    }
+    val dir = File(System.getProperty("java.io.tmpdir"), "andpub-url-artifacts").apply {
+        mkdirs()
+    }
+    return File.createTempFile("artifact-", suffix, dir)
 }
 
 private fun runCommand(command: List<String>): String {

@@ -21,3 +21,6 @@ actual suspend fun inspectLocalArtifact(
     bundletoolPath: String,
 ): Result<ArtifactInspection> =
     Result.failure(UnsupportedOperationException("iOS 端暂未接入文件选择与解析"))
+
+actual suspend fun downloadArtifactFromUrl(url: String): Result<String> =
+    Result.failure(UnsupportedOperationException("iOS 端暂未接入 URL 产物下载"))

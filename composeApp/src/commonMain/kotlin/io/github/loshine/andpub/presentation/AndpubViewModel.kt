@@ -44,6 +44,7 @@ data class ChannelTestUiState(
 data class AndpubUiState(
     val snapshot: LocalStateSnapshot = LocalStateSnapshot(),
     val message: String? = null,
+    val isCreatingPublishTasks: Boolean = false,
     val channelTests: Map<String, ChannelTestUiState> = emptyMap(),
 ) {
     val apps: List<AppRecord> = snapshot.apps
@@ -62,6 +63,12 @@ data class AndpubUiState(
         get() = selectedAppId?.let { appId ->
             channels.filter { it.appId == appId }
         } ?: emptyList()
+
+    val publishTargetChannels: List<ChannelRecord>
+        get() {
+            val targetIds = snapshot.publishChannelIds.toSet()
+            return selectedChannels.filter { it.id in targetIds }
+        }
 }
 
 sealed interface AndpubIntent {
@@ -94,6 +101,7 @@ sealed interface AndpubIntent {
     data class SyncChannel(val channel: ChannelRecord) : AndpubIntent
     data class SyncAllChannels(val notify: Boolean) : AndpubIntent
     data class DeleteChannel(val channelId: String) : AndpubIntent
+    data class TogglePublishChannel(val channelId: String, val selected: Boolean) : AndpubIntent
     data class UpdateUnifiedArtifact(val draft: ArtifactDraft) : AndpubIntent
     data class UpdateChannelArtifact(val channelId: String, val draft: ArtifactDraft) : AndpubIntent
     data class ApplyInspectionToUnified(val path: String, val inspection: ArtifactInspection) :
@@ -154,16 +162,19 @@ class AndpubViewModel(
     private val observeState = ObserveAndpubStateUseCase(repository)
     private val updateState = UpdateAndpubStateUseCase(repository)
     private val message = MutableStateFlow<String?>(null)
+    private val isCreatingPublishTasks = MutableStateFlow(false)
     private val channelTests = MutableStateFlow<Map<String, ChannelTestUiState>>(emptyMap())
 
     val uiState: StateFlow<AndpubUiState> = combine(
         observeState(),
         message,
+        isCreatingPublishTasks,
         channelTests,
-    ) { snapshot, currentMessage, tests ->
+    ) { snapshot, currentMessage, creatingTasks, tests ->
         AndpubUiState(
             snapshot = snapshot.ensureSelectedApp(),
             message = currentMessage,
+            isCreatingPublishTasks = creatingTasks,
             channelTests = tests,
         )
     }.stateIn(
@@ -186,6 +197,7 @@ class AndpubViewModel(
             is AndpubIntent.SyncChannel -> syncChannel(intent.channel)
             is AndpubIntent.SyncAllChannels -> syncAllChannels(intent.notify)
             is AndpubIntent.DeleteChannel -> deleteChannel(intent.channelId)
+            is AndpubIntent.TogglePublishChannel -> togglePublishChannel(intent.channelId, intent.selected)
             is AndpubIntent.UpdateUnifiedArtifact -> reduce {
                 it.copy(unifiedArtifact = intent.draft)
             }
@@ -371,6 +383,7 @@ class AndpubViewModel(
                 channels = it.channels.filterNot { channel -> channel.appId == appId },
                 publishTasks = it.publishTasks.filterNot { task -> task.appId == appId },
                 channelArtifacts = it.channelArtifacts.filterKeys { channelId -> channelId !in deletedChannelIds },
+                publishChannelIds = it.publishChannelIds.filterNot { channelId -> channelId in deletedChannelIds },
                 selectedAppId = apps.firstOrNull { app -> app.id != appId }?.id,
             )
         }
@@ -409,6 +422,17 @@ class AndpubViewModel(
                     weComWebhookUrl = settings.weComWebhookUrl.trim(),
                 )
             )
+        }
+    }
+
+    private fun togglePublishChannel(channelId: String, selected: Boolean) {
+        reduce {
+            val channelIds = if (selected) {
+                it.publishChannelIds + channelId
+            } else {
+                it.publishChannelIds - channelId
+            }
+            it.copy(publishChannelIds = channelIds.distinct())
         }
     }
 
@@ -474,6 +498,7 @@ class AndpubViewModel(
                 channels = it.channels.filterNot { channel -> channel.id == channelId },
                 publishTasks = it.publishTasks.filterNot { task -> task.channelId == channelId },
                 channelArtifacts = it.channelArtifacts - channelId,
+                publishChannelIds = it.publishChannelIds - channelId,
             )
         }
     }
@@ -607,14 +632,31 @@ class AndpubViewModel(
             message.value = "请先选择应用"
             return
         }
-        if (state.selectedChannels.isEmpty()) {
-            message.value = "请先添加渠道"
+        if (state.publishTargetChannels.isEmpty()) {
+            message.value = "请先勾选要发布的渠道"
             return
         }
 
-        reduce("已创建 ${state.selectedChannels.size} 个 mock 发布任务") { snapshot ->
-            val tasks = createPublishTasks(snapshot, app, state.selectedChannels)
-            snapshot.copy(publishTasks = snapshot.publishTasks + tasks)
+        viewModelScope.launch {
+            isCreatingPublishTasks.value = true
+            message.value = "正在创建发布任务..."
+            try {
+                runCatching {
+                    val tasks = createPublishTasks(state.snapshot, app, state.publishTargetChannels)
+                    updateState {
+                        it.copy(
+                            publishTasks = it.publishTasks.filterNot { task -> task.appId == app.id } + tasks
+                        )
+                    }
+                    tasks
+                }.onSuccess {
+                    message.value = "已创建 ${it.size} 个发布任务"
+                }.onFailure {
+                    message.value = "创建发布任务失败：${it.message ?: "未知错误"}"
+                }
+            } finally {
+                isCreatingPublishTasks.value = false
+            }
         }
     }
 
@@ -650,6 +692,9 @@ class AndpubViewModel(
             } ?: apps.firstOrNull()?.id,
             channelArtifacts = channels.fold(channelArtifacts) { artifacts, channel ->
                 if (channel.id in artifacts) artifacts else artifacts + (channel.id to ArtifactDraft())
+            },
+            publishChannelIds = publishChannelIds.filter { channelId ->
+                channels.any { it.id == channelId }
             },
         )
 

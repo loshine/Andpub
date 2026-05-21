@@ -168,6 +168,7 @@ data class ArtifactDraft(
     val sourceType: ArtifactSourceType = ArtifactSourceType.LocalFile,
     val packageType: PackageType = PackageType.Apk,
     val value: String = "",
+    val downloadedPath: String = "",
     val md5: String = "",
     val sha1: String = "",
     val sha256: String = "",
@@ -183,6 +184,7 @@ data class ArtifactDraft(
 @Serializable
 data class ArtifactPart(
     val value: String = "",
+    val downloadedPath: String = "",
     val md5: String = "",
     val sha1: String = "",
     val sha256: String = "",
@@ -242,4 +244,5 @@ data class LocalStateSnapshot(
     val toolSettings: ToolSettings = ToolSettings(),
     val selectedAppId: String? = null,
     val publishMode: PublishMode = PublishMode.UnifiedArtifact,
+    val publishChannelIds: List<String> = emptyList(),
 )

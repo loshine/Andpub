@@ -15,6 +15,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeContentPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -32,6 +35,7 @@ import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
@@ -63,12 +67,14 @@ import io.github.loshine.andpub.domain.model.ChannelSyncStatus
 import io.github.loshine.andpub.domain.model.FieldKind
 import io.github.loshine.andpub.domain.model.FieldSchema
 import io.github.loshine.andpub.domain.model.HuaweiAuthMode
+import io.github.loshine.andpub.domain.model.LogLevel
 import io.github.loshine.andpub.domain.model.MarketAppInfo
 import io.github.loshine.andpub.domain.model.MarketCapability
 import io.github.loshine.andpub.domain.model.MarketType
 import io.github.loshine.andpub.domain.model.PackageType
 import io.github.loshine.andpub.domain.model.PublishMode
 import io.github.loshine.andpub.domain.model.PublishTaskRecord
+import io.github.loshine.andpub.domain.model.PublishTaskStatus
 import io.github.loshine.andpub.domain.model.SplitApkSlot
 import io.github.loshine.andpub.domain.model.ToolSettings
 import io.github.loshine.andpub.platform.inspectLocalArtifact
@@ -397,6 +403,7 @@ private fun AppDetail(
 ) {
     val app = state.selectedApp
     var selectedTab by remember(app?.id) { mutableStateOf(AppDetailTab.Channels) }
+    var showPublishProcess by remember(app?.id) { mutableStateOf(false) }
     if (app == null) {
         Box(
             modifier = Modifier.fillMaxSize(),
@@ -441,8 +448,24 @@ private fun AppDetail(
         when (selectedTab) {
             AppDetailTab.Channels -> ChannelSection(state, onIntent)
             AppDetailTab.Publish -> {
-                ArtifactSection(state, onIntent)
-                PublishTaskSection(state, onIntent)
+                if (showPublishProcess) {
+                    PublishProcessPage(
+                        state = state,
+                        onBack = { showPublishProcess = false },
+                    )
+                } else {
+                    PublishTargetSection(state, onIntent)
+                    if (state.publishTargetChannels.isNotEmpty()) {
+                        ArtifactSection(state, state.publishTargetChannels, onIntent)
+                    }
+                    PublishTaskSection(
+                        state = state,
+                        onCreate = {
+                            showPublishProcess = true
+                            onIntent(AndpubIntent.CreateMockPublishTasks)
+                        },
+                    )
+                }
             }
         }
     }
@@ -664,9 +687,54 @@ private fun ChannelSection(
 }
 
 @Composable
-private fun PublishTaskSection(
+private fun PublishTargetSection(
     state: AndpubUiState,
     onIntent: (AndpubIntent) -> Unit,
+) {
+    val targetIds = state.publishTargetChannels.map { it.id }.toSet()
+
+    OutlinedCard(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text("发布渠道", style = MaterialTheme.typography.titleMedium)
+            if (state.selectedChannels.isEmpty()) {
+                Text("暂无渠道，请先在渠道管理中新增渠道。")
+                return@Column
+            }
+            state.selectedChannels.forEach { channel ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Checkbox(
+                        checked = channel.id in targetIds,
+                        onCheckedChange = {
+                            onIntent(AndpubIntent.TogglePublishChannel(channel.id, it))
+                        },
+                    )
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                    ) {
+                        Text(channel.displayTitle(), style = MaterialTheme.typography.bodyLarge)
+                        Text(channel.marketType.displayName, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
+            if (targetIds.isEmpty()) {
+                Text("勾选渠道后才会显示该渠道的发布配置。", style = MaterialTheme.typography.bodySmall)
+            }
+        }
+    }
+}
+
+@Composable
+private fun PublishTaskSection(
+    state: AndpubUiState,
+    onCreate: () -> Unit,
 ) {
     val app = state.selectedApp ?: return
     val tasks = state.publishTasks.filter { it.appId == app.id }
@@ -678,10 +746,13 @@ private fun PublishTaskSection(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("当前阶段只创建 mock 任务，用于验证任务模型、状态和日志。")
+                Text("当前阶段创建待提交任务，用于验证产物、状态和日志。")
             }
-            Button(onClick = { onIntent(AndpubIntent.CreateMockPublishTasks) }) {
-                Text("创建 mock 任务")
+            Button(
+                enabled = state.publishTargetChannels.isNotEmpty() && !state.isCreatingPublishTasks,
+                onClick = onCreate,
+            ) {
+                Text(if (state.isCreatingPublishTasks) "创建中..." else "创建发布任务")
             }
         }
 
@@ -692,6 +763,115 @@ private fun PublishTaskSection(
 
         tasks.forEach { task ->
             PublishTaskCard(task)
+        }
+    }
+}
+
+@Composable
+private fun PublishProcessPage(
+    state: AndpubUiState,
+    onBack: () -> Unit,
+) {
+    val app = state.selectedApp ?: return
+    val tasks = state.publishTasks.filter { it.appId == app.id }
+    var showDetailLogs by remember(app.id) { mutableStateOf(false) }
+
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                TextButton(onClick = onBack) {
+                    Text("返回配置")
+                }
+                Text("发布过程", style = MaterialTheme.typography.titleLarge)
+            }
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("详细日志")
+                Switch(
+                    checked = showDetailLogs,
+                    onCheckedChange = { showDetailLogs = it },
+                )
+            }
+        }
+
+        if (state.isCreatingPublishTasks && tasks.isEmpty()) {
+            Text("正在下载并检查产物...")
+        }
+
+        if (tasks.isEmpty()) {
+            Text("暂无发布任务")
+            return@Column
+        }
+
+        LazyVerticalGrid(
+            columns = GridCells.Adaptive(minSize = 360.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 240.dp, max = 960.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            gridItems(tasks, key = { it.id }) { task ->
+                PublishProcessCard(task, showDetailLogs)
+            }
+        }
+    }
+}
+
+@Composable
+private fun PublishProcessCard(
+    task: PublishTaskRecord,
+    showDetailLogs: Boolean,
+) {
+    OutlinedCard(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(task.marketType.displayName, style = MaterialTheme.typography.titleMedium)
+                Text(task.status.displayName, style = MaterialTheme.typography.labelLarge)
+            }
+
+            if (showDetailLogs) {
+                task.logs.forEach { log ->
+                    Text(
+                        "${log.level.name}: ${log.message}",
+                        color = log.level.color(),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            } else {
+                PublishProcessSection("下载相关信息", task.downloadSummary())
+                PublishProcessSection("校验相关信息", task.validationSummary())
+                PublishProcessSection("发布相关信息", task.publishSummary())
+            }
+        }
+    }
+}
+
+@Composable
+private fun PublishProcessSection(
+    title: String,
+    lines: List<String>,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(title, style = MaterialTheme.typography.titleSmall)
+        lines.forEach {
+            Text(it, style = MaterialTheme.typography.bodySmall)
         }
     }
 }
@@ -716,6 +896,11 @@ private fun PublishTaskCard(
             Text("${task.publishMode.displayName} / ${task.artifact.sourceType.displayName} / ${task.artifact.packageType.displayName}")
             if (task.artifact.value.isNotBlank()) {
                 Text(task.artifact.value, style = MaterialTheme.typography.bodySmall)
+            }
+            if (task.artifact.packageType == PackageType.SplitApk) {
+                ArtifactInspectionSummary(task.artifact)
+            } else if (task.artifact.message != null) {
+                ArtifactInspectionSummary(task.artifact)
             }
             task.logs.forEach { log ->
                 val color = when (log.level) {
@@ -1237,6 +1422,7 @@ private fun MarketAppInfoContent(
 @Composable
 private fun ArtifactSection(
     state: AndpubUiState,
+    targetChannels: List<ChannelRecord>,
     onIntent: (AndpubIntent) -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -1251,14 +1437,20 @@ private fun ArtifactSection(
         }
 
         if (state.publishMode == PublishMode.UnifiedArtifact) {
-            val selectedCapabilities = state.selectedChannels
+            val selectedCapabilities = targetChannels
                 .map { MarketDefinitions.schemaOf(it.marketType).capability }
+            val urlFallbackMarkets = targetChannels
+                .filter { !MarketDefinitions.schemaOf(it.marketType).capability.supportsUserUrl }
+                .joinToString("、") { it.marketType.displayName }
             ArtifactEditor(
                 title = "统一产物",
                 draft = state.unifiedArtifactDraft,
                 toolSettings = state.toolSettings,
                 allowedPackageTypes = selectedCapabilities.allowedPackageTypes(),
-                allowUrl = selectedCapabilities.all { it.supportsUserUrl },
+                allowUrl = true,
+                urlFallbackMessage = urlFallbackMarkets.takeIf { it.isNotBlank() }?.let {
+                    "$it 不支持 URL 直传，创建发布任务时会先下载到本地再按文件上传。"
+                },
                 onDraftChange = { onIntent(AndpubIntent.UpdateUnifiedArtifact(it)) },
                 onPickFile = { path, inspectionResult ->
                     inspectionResult.fold(
@@ -1297,9 +1489,9 @@ private fun ArtifactSection(
                 },
             )
         } else {
-            val channels = state.selectedChannels
+            val channels = targetChannels
             if (channels.isEmpty()) {
-                Text("先添加渠道，再为每个渠道配置独立产物。")
+                Text("先勾选要发布的渠道，再为每个渠道配置独立产物。")
             }
             channels.forEach { channel ->
                 val capability = MarketDefinitions.schemaOf(channel.marketType).capability
@@ -1308,7 +1500,12 @@ private fun ArtifactSection(
                     draft = state.artifactDrafts[channel.id] ?: ArtifactDraft(),
                     toolSettings = state.toolSettings,
                     allowedPackageTypes = listOf(capability).allowedPackageTypes(),
-                    allowUrl = capability.supportsUserUrl,
+                    allowUrl = true,
+                    urlFallbackMessage = if (capability.supportsUserUrl) {
+                        null
+                    } else {
+                        "${channel.marketType.displayName} 不支持 URL 直传，创建发布任务时会先下载到本地再按文件上传。"
+                    },
                     onDraftChange = {
                         onIntent(
                             AndpubIntent.UpdateChannelArtifact(
@@ -1376,6 +1573,7 @@ private fun ArtifactEditor(
     toolSettings: ToolSettings,
     allowedPackageTypes: Set<PackageType>,
     allowUrl: Boolean,
+    urlFallbackMessage: String?,
     onDraftChange: (ArtifactDraft) -> Unit,
     onPickFile: (String, Result<io.github.loshine.andpub.domain.model.ArtifactInspection>) -> Unit,
     onPickSplitFile: (
@@ -1388,10 +1586,7 @@ private fun ArtifactEditor(
     val selectedPackageType = draft.packageType.takeIf { it in allowedPackageTypes }
         ?: allowedPackageTypes.first()
     val effectiveDraft = draft.copy(
-        sourceType = if (
-            selectedPackageType == PackageType.SplitApk ||
-            (draft.sourceType == ArtifactSourceType.Url && !allowUrl)
-        ) {
+        sourceType = if (draft.sourceType == ArtifactSourceType.Url && !allowUrl) {
             ArtifactSourceType.LocalFile
         } else {
             draft.sourceType
@@ -1406,16 +1601,17 @@ private fun ArtifactEditor(
         ) {
             Text(title, style = MaterialTheme.typography.titleMedium)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                val sourceTypes = if (effectiveDraft.packageType == PackageType.SplitApk) {
-                    listOf(ArtifactSourceType.LocalFile)
-                } else {
-                    ArtifactSourceType.entries.filter { it == ArtifactSourceType.LocalFile || allowUrl }
-                }
+                val sourceTypes = ArtifactSourceType.entries
+                    .filter { it == ArtifactSourceType.LocalFile || allowUrl }
                 sourceTypes
                     .forEach { type ->
                         StableFilterChip(
                             selected = effectiveDraft.sourceType == type,
-                            onClick = { onDraftChange(effectiveDraft.copy(sourceType = type)) },
+                            onClick = {
+                                onDraftChange(
+                                    effectiveDraft.copy(sourceType = type).withoutInspection()
+                                )
+                            },
                             label = { Text(type.displayName) },
                         )
                     }
@@ -1428,11 +1624,7 @@ private fun ArtifactEditor(
                             onDraftChange(
                                 effectiveDraft.copy(
                                     packageType = type,
-                                    sourceType = if (type == PackageType.SplitApk) {
-                                        ArtifactSourceType.LocalFile
-                                    } else {
-                                        effectiveDraft.sourceType
-                                    },
+                                    sourceType = effectiveDraft.sourceType,
                                 )
                             )
                         },
@@ -1440,20 +1632,12 @@ private fun ArtifactEditor(
                     )
                 }
             }
-            if (!allowUrl) {
-                Text("当前目标渠道不支持用户 URL 拉包。", style = MaterialTheme.typography.bodySmall)
-            }
-            if (effectiveDraft.packageType == PackageType.SplitApk) {
-                Text(
-                    "32/64 APK 当前阶段仅支持本地文件。",
-                    style = MaterialTheme.typography.bodySmall
-                )
-            }
-
+            urlFallbackMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
             if (effectiveDraft.packageType == PackageType.SplitApk) {
                 SplitArtifactFileRow(
                     slot = SplitApkSlot.Arm32,
                     part = effectiveDraft.split32,
+                    sourceType = effectiveDraft.sourceType,
                     toolSettings = toolSettings,
                     onPartChange = { onDraftChange(effectiveDraft.copy(split32 = it)) },
                     onPickFile = onPickSplitFile,
@@ -1461,6 +1645,7 @@ private fun ArtifactEditor(
                 SplitArtifactFileRow(
                     slot = SplitApkSlot.Arm64,
                     part = effectiveDraft.split64,
+                    sourceType = effectiveDraft.sourceType,
                     toolSettings = toolSettings,
                     onPartChange = { onDraftChange(effectiveDraft.copy(split64 = it)) },
                     onPickFile = onPickSplitFile,
@@ -1473,7 +1658,7 @@ private fun ArtifactEditor(
                 ) {
                     OutlinedTextField(
                         value = effectiveDraft.value,
-                        onValueChange = { onDraftChange(effectiveDraft.copy(value = it)) },
+                        onValueChange = { onDraftChange(effectiveDraft.withEditedValue(it)) },
                         label = { Text(if (effectiveDraft.sourceType == ArtifactSourceType.Url) "URL" else "本地文件路径") },
                         singleLine = true,
                         modifier = Modifier.weight(1f),
@@ -1512,6 +1697,7 @@ private fun ArtifactEditor(
 private fun SplitArtifactFileRow(
     slot: SplitApkSlot,
     part: ArtifactPart,
+    sourceType: ArtifactSourceType,
     toolSettings: ToolSettings,
     onPartChange: (ArtifactPart) -> Unit,
     onPickFile: (
@@ -1529,28 +1715,30 @@ private fun SplitArtifactFileRow(
         ) {
             OutlinedTextField(
                 value = part.value,
-                onValueChange = { onPartChange(part.copy(value = it)) },
-                label = { Text("${slot.displayName} 文件路径") },
+                onValueChange = { onPartChange(part.withEditedValue(it)) },
+                label = { Text(if (sourceType == ArtifactSourceType.Url) "${slot.displayName} URL" else "${slot.displayName} 文件路径") },
                 singleLine = true,
                 modifier = Modifier.weight(1f),
             )
-            OutlinedButton(
-                onClick = {
-                    scope.launch {
-                        val path = pickArtifactFilePath() ?: return@launch
-                        onPickFile(
-                            slot,
-                            path,
-                            inspectLocalArtifact(
-                                path = path,
-                                androidSdkPath = toolSettings.androidSdkPath,
-                                bundletoolPath = toolSettings.bundletoolPath,
+            if (sourceType == ArtifactSourceType.LocalFile) {
+                OutlinedButton(
+                    onClick = {
+                        scope.launch {
+                            val path = pickArtifactFilePath() ?: return@launch
+                            onPickFile(
+                                slot,
+                                path,
+                                inspectLocalArtifact(
+                                    path = path,
+                                    androidSdkPath = toolSettings.androidSdkPath,
+                                    bundletoolPath = toolSettings.bundletoolPath,
+                                )
                             )
-                        )
-                    }
-                },
-            ) {
-                Text("选择")
+                        }
+                    },
+                ) {
+                    Text("选择")
+                }
             }
         }
         ArtifactPartSummary(slot.displayName, part)
@@ -1619,6 +1807,10 @@ private fun ArtifactInspectionSummary(
     if (draft.value.isBlank() && draft.message == null) return
 
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        if (draft.downloadedPath.isNotBlank()) Text(
+            "下载到本地：${draft.downloadedPath}",
+            style = MaterialTheme.typography.bodySmall
+        )
         draft.message?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
         if (draft.md5.isNotBlank()) Text(
             "MD5：${draft.md5}",
@@ -1651,6 +1843,11 @@ private fun ArtifactPartSummary(
 
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text(label, style = MaterialTheme.typography.titleSmall)
+        if (part.value.isNotBlank()) Text(part.value, style = MaterialTheme.typography.bodySmall)
+        if (part.downloadedPath.isNotBlank()) Text(
+            "下载到本地：${part.downloadedPath}",
+            style = MaterialTheme.typography.bodySmall
+        )
         part.message?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
         if (part.md5.isNotBlank()) Text(
             "MD5：${part.md5}",
@@ -1673,3 +1870,83 @@ private fun ArtifactPartSummary(
     }
     Spacer(Modifier.height(4.dp))
 }
+
+private fun ArtifactDraft.withEditedValue(value: String): ArtifactDraft =
+    copy(value = value).withoutInspection()
+
+private fun ArtifactDraft.withoutInspection(): ArtifactDraft =
+    copy(
+        downloadedPath = "",
+        md5 = "",
+        sha1 = "",
+        sha256 = "",
+        packageName = null,
+        versionName = null,
+        versionCode = null,
+        abiList = emptyList(),
+        message = null,
+    )
+
+private fun ArtifactPart.withEditedValue(value: String): ArtifactPart =
+    copy(
+        value = value,
+        downloadedPath = "",
+        md5 = "",
+        sha1 = "",
+        sha256 = "",
+        packageName = null,
+        versionName = null,
+        versionCode = null,
+        abiList = emptyList(),
+        message = null,
+    )
+
+private fun PublishTaskRecord.downloadSummary(): List<String> =
+    if (artifact.packageType == PackageType.SplitApk) {
+        listOf(
+            "32 位来源：${artifact.split32.value.ifBlank { "-" }}",
+            "32 位本地：${artifact.split32.downloadedPath.ifBlank { "-" }}",
+            "64 位来源：${artifact.split64.value.ifBlank { "-" }}",
+            "64 位本地：${artifact.split64.downloadedPath.ifBlank { "-" }}",
+        )
+    } else {
+        listOf(
+            "来源：${artifact.value.ifBlank { "-" }}",
+            "本地：${artifact.downloadedPath.ifBlank { "-" }}",
+        )
+    }
+
+private fun PublishTaskRecord.validationSummary(): List<String> {
+    val base = if (artifact.packageType == PackageType.SplitApk) {
+        listOf(
+            "32 位包名：${artifact.split32.packageName ?: "-"}",
+            "32 位版本：${artifact.split32.versionName ?: "-"}",
+            "64 位包名：${artifact.split64.packageName ?: "-"}",
+            "64 位版本：${artifact.split64.versionName ?: "-"}",
+        )
+    } else {
+        listOf(
+            "包名：${artifact.packageName ?: "-"}",
+            "版本：${artifact.versionName ?: "-"}",
+            "versionCode：${artifact.versionCode?.toString() ?: "-"}",
+        )
+    }
+    val errors = logs.filter { it.level == LogLevel.Error }.map { "错误：${it.message}" }
+    return base + errors
+}
+
+private fun PublishTaskRecord.publishSummary(): List<String> =
+    when (status) {
+        PublishTaskStatus.Failed -> listOf("未进入发布：前置检查失败")
+        PublishTaskStatus.Ready -> listOf("待提交：当前阶段尚未调用厂商上传接口")
+        PublishTaskStatus.Created -> listOf("已创建：等待检查")
+        PublishTaskStatus.Validating -> listOf("检查中：正在准备产物")
+    }
+
+@Composable
+private fun LogLevel.color() =
+    when (this) {
+        LogLevel.Info -> MaterialTheme.colorScheme.onSurface
+        LogLevel.Warning -> MaterialTheme.colorScheme.primary
+        LogLevel.Error -> MaterialTheme.colorScheme.error
+    }
