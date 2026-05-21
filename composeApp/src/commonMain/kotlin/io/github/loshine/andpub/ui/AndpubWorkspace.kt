@@ -24,14 +24,20 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -79,6 +85,11 @@ private enum class HuaweiServiceAccountInputMode(val displayName: String) {
     SplitFields("拆字段录入"),
 }
 
+private enum class AppDetailTab(val title: String) {
+    Channels("渠道管理"),
+    Publish("发布"),
+}
+
 @Composable
 fun AndpubWorkspace(
     viewModel: AndpubViewModel = koinViewModel(),
@@ -120,6 +131,7 @@ private fun AppSidebar(
 ) {
     var appDialogId by remember { mutableStateOf<String?>(null) }
     var deletingAppId by remember { mutableStateOf<String?>(null) }
+    var settingsDialogVisible by remember { mutableStateOf(false) }
     val editingApp = state.apps.firstOrNull { it.id == appDialogId }
     val deletingApp = state.apps.firstOrNull { it.id == deletingAppId }
 
@@ -127,8 +139,22 @@ private fun AppSidebar(
         modifier = modifier.padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("Andpub", style = MaterialTheme.typography.headlineMedium)
-        Text("多市场发包客户端", style = MaterialTheme.typography.bodyMedium)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.Top,
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("Andpub", style = MaterialTheme.typography.headlineMedium)
+                Text("多市场发包客户端", style = MaterialTheme.typography.bodyMedium)
+            }
+            IconButton(onClick = { settingsDialogVisible = true }) {
+                Icon(
+                    imageVector = Icons.Outlined.Settings,
+                    contentDescription = "本地工具设置",
+                )
+            }
+        }
 
         Button(
             onClick = { appDialogId = NEW_APP_DIALOG_ID },
@@ -219,6 +245,14 @@ private fun AppSidebar(
                 onIntent(AndpubIntent.DeleteApp(app.id))
                 deletingAppId = null
             },
+        )
+    }
+
+    if (settingsDialogVisible) {
+        ToolSettingsDialog(
+            state = state,
+            onIntent = onIntent,
+            onDismiss = { settingsDialogVisible = false },
         )
     }
 }
@@ -362,6 +396,7 @@ private fun AppDetail(
     onIntent: (AndpubIntent) -> Unit,
 ) {
     val app = state.selectedApp
+    var selectedTab by remember(app?.id) { mutableStateOf(AppDetailTab.Channels) }
     if (app == null) {
         Box(
             modifier = Modifier.fillMaxSize(),
@@ -393,17 +428,32 @@ private fun AppDetail(
             }
         }
 
-        ToolSettingsSection(state, onIntent)
-        ChannelSection(state, onIntent)
-        ArtifactSection(state, onIntent)
-        PublishTaskSection(state, onIntent)
+        TabRow(selectedTabIndex = selectedTab.ordinal) {
+            AppDetailTab.entries.forEach { tab ->
+                Tab(
+                    selected = selectedTab == tab,
+                    onClick = { selectedTab = tab },
+                    text = { Text(tab.title) },
+                )
+            }
+        }
+
+        when (selectedTab) {
+            AppDetailTab.Channels -> ChannelSection(state, onIntent)
+            AppDetailTab.Publish -> {
+                ArtifactSection(state, onIntent)
+                PublishTaskSection(state, onIntent)
+            }
+        }
     }
+
 }
 
 @Composable
-private fun ToolSettingsSection(
+private fun ToolSettingsDialog(
     state: AndpubUiState,
     onIntent: (AndpubIntent) -> Unit,
+    onDismiss: () -> Unit,
 ) {
     var androidSdkPath by remember(state.toolSettings) {
         mutableStateOf(state.toolSettings.androidSdkPath)
@@ -417,39 +467,18 @@ private fun ToolSettingsSection(
     var toolMessages by remember { mutableStateOf<List<String>>(emptyList()) }
     val scope = rememberCoroutineScope()
 
-    OutlinedCard(modifier = Modifier.fillMaxWidth()) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("本地工具设置") },
+        text = {
         Column(
-            modifier = Modifier.padding(16.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 560.dp)
+                .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text("本地工具设置", style = MaterialTheme.typography.titleLarge)
-                    Text("APK 解析使用 Android SDK build-tools/aapt2；AAB 解析使用 bundletool-all.jar。")
-                }
-                Button(
-                    onClick = {
-                        val settings = ToolSettings(
-                            androidSdkPath = androidSdkPath,
-                            bundletoolPath = bundletoolPath,
-                            weComWebhookUrl = weComWebhookUrl,
-                        )
-                        onIntent(AndpubIntent.UpdateToolSettings(settings))
-                        scope.launch {
-                            toolMessages = inspectToolSettings(
-                                androidSdkPath = settings.androidSdkPath,
-                                bundletoolPath = settings.bundletoolPath,
-                            ).messages
-                        }
-                    },
-                ) {
-                    Text("保存设置")
-                }
-            }
+            Text("APK 解析使用 Android SDK build-tools/aapt2；AAB 解析使用 bundletool-all.jar。")
             OutlinedTextField(
                 value = androidSdkPath,
                 onValueChange = { androidSdkPath = it },
@@ -472,25 +501,50 @@ private fun ToolSettingsSection(
                 visualTransformation = PasswordVisualTransformation(),
                 modifier = Modifier.fillMaxWidth(),
             )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(
-                    onClick = {
-                        scope.launch {
-                            toolMessages = inspectToolSettings(
-                                androidSdkPath = androidSdkPath,
-                                bundletoolPath = bundletoolPath,
-                            ).messages
-                        }
-                    },
-                ) {
-                    Text("检测工具")
-                }
+            OutlinedButton(
+                onClick = {
+                    scope.launch {
+                        toolMessages = inspectToolSettings(
+                            androidSdkPath = androidSdkPath,
+                            bundletoolPath = bundletoolPath,
+                        ).messages
+                    }
+                },
+            ) {
+                Text("检测工具")
             }
             toolMessages.forEach { message ->
                 Text(message, style = MaterialTheme.typography.bodySmall)
             }
         }
-    }
+        },
+        confirmButton = {
+            Button(
+                    onClick = {
+                        val settings = ToolSettings(
+                            androidSdkPath = androidSdkPath,
+                            bundletoolPath = bundletoolPath,
+                            weComWebhookUrl = weComWebhookUrl,
+                        )
+                        onIntent(AndpubIntent.UpdateToolSettings(settings))
+                        scope.launch {
+                            toolMessages = inspectToolSettings(
+                                androidSdkPath = settings.androidSdkPath,
+                                bundletoolPath = settings.bundletoolPath,
+                            ).messages
+                        }
+                        onDismiss()
+                    },
+            ) {
+                Text("保存")
+            }
+        },
+        dismissButton = {
+            OutlinedButton(onClick = onDismiss) {
+                Text("取消")
+            }
+        },
+    )
 }
 
 @Composable
@@ -514,7 +568,6 @@ private fun ChannelSection(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("渠道管理", style = MaterialTheme.typography.titleLarge)
                 Text("渠道以独立记录保存，可按市场新增、编辑、删除，并查询市场侧应用信息。")
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -625,7 +678,6 @@ private fun PublishTaskSection(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("发布任务", style = MaterialTheme.typography.titleLarge)
                 Text("当前阶段只创建 mock 任务，用于验证任务模型、状态和日志。")
             }
             Button(onClick = { onIntent(AndpubIntent.CreateMockPublishTasks) }) {
@@ -1188,7 +1240,6 @@ private fun ArtifactSection(
     onIntent: (AndpubIntent) -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("阶段 3：本地产物处理", style = MaterialTheme.typography.titleLarge)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             PublishMode.entries.forEach { mode ->
                 StableFilterChip(
