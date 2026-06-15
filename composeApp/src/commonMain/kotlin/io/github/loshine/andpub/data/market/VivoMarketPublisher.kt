@@ -65,18 +65,23 @@ class VivoMarketPublisher(
             val compatibleDevice = options.compatibleDevice ?: error("缺少 vivo 发布字段：compatibleDevice")
             val accessKey = request.channel.requiredCredential("accessKey")
             val accessSecret = request.channel.requiredCredential("accessSecret")
-            val logs = mutableListOf(
+            val logs = mutableListOf<PublishTaskLog>()
+            logs.emit(
+                request,
                 PublishTaskLog(
                     level = LogLevel.Info,
                     message = "vivo API 环境：${environment.displayName}",
                     stage = PublishTaskStage.Validation,
-                )
+                ),
             )
-            logs += proveAppExists(
-                accessKey = accessKey,
-                accessSecret = accessSecret,
-                packageName = request.app.packageName,
-                environment = environment,
+            logs.emit(
+                request,
+                proveAppExists(
+                    accessKey = accessKey,
+                    accessSecret = accessSecret,
+                    packageName = request.app.packageName,
+                    environment = environment,
+                ),
             )
 
             when (request.task.artifact.packageType) {
@@ -179,9 +184,20 @@ class VivoMarketPublisher(
         val versionCode = artifact.versionCode ?: error("缺少 vivo 发布字段：versionCode")
         val fileMd5 = artifact.md5.takeIf { it.isNotBlank() } ?: error("缺少 vivo 发布字段：fileMd5")
         val path = artifact.value.takeIf { it.isNotBlank() } ?: error("缺少 APK 文件")
+        logs.emit(request, PublishTaskLog(LogLevel.Info, "读取 APK 文件：${path.fileName()}", PublishTaskStage.Upload))
         val bytes = readFile(path).getOrElse { error("读取 APK 文件失败：${it.message ?: "未知错误"}") }
         val environment = request.channel.vivoEnvironment()
-        logs += PublishTaskLog(LogLevel.Info, "开始上传 APK：${path.fileName()}", PublishTaskStage.Upload)
+        logs.emit(
+            request,
+            PublishTaskLog(
+                LogLevel.Info,
+                "开始上传 APK：${path.fileName()}，${bytes.size.toLong().readableBytes()}",
+                PublishTaskStage.Upload,
+                progressPercent = 0,
+                progressKey = "upload:apk:universal",
+                progressLabel = "APK 上传",
+            )
+        )
         val upload = remote.uploadApk(
             accessKey = accessKey,
             accessSecret = accessSecret,
@@ -193,10 +209,20 @@ class VivoMarketPublisher(
         )
         val serial = upload.serialNumber ?: error("vivo 上传 APK 未返回 serialnumber")
         val uploadMd5 = upload.md5?.takeIf { it.isNotBlank() } ?: fileMd5
-        logs += PublishTaskLog(
-            LogLevel.Info,
-            "APK 上传完成：serialnumber=$serial，versionCode=$versionCode，md5=$uploadMd5",
-            PublishTaskStage.Upload,
+        logs.emit(
+            request,
+            PublishTaskLog(
+                LogLevel.Info,
+                "APK 上传完成：serialnumber=$serial，versionCode=$versionCode，md5=$uploadMd5",
+                PublishTaskStage.Upload,
+                progressPercent = 100,
+                progressKey = "upload:apk:universal",
+                progressLabel = "APK 上传",
+            ),
+        )
+        logs.emit(
+            request,
+            PublishTaskLog(LogLevel.Info, "开始提交 vivo 更新审核", PublishTaskStage.Submit)
         )
         val submit = remote.syncUpdateApp(
             accessKey = accessKey,
@@ -211,10 +237,13 @@ class VivoMarketPublisher(
             ),
             environment = environment,
         )
-        logs += PublishTaskLog(
-            level = LogLevel.Info,
-            message = "vivo 更新提交成功${submit.taskId?.let { "：taskId=$it" }.orEmpty()}",
-            stage = PublishTaskStage.Submit,
+        logs.emit(
+            request,
+            PublishTaskLog(
+                level = LogLevel.Info,
+                message = "vivo 更新提交成功${submit.taskId?.let { "：taskId=$it" }.orEmpty()}",
+                stage = PublishTaskStage.Submit,
+            ),
         )
         return MarketPublishResult(
             status = PublishTaskStatus.Submitted,
@@ -238,20 +267,25 @@ class VivoMarketPublisher(
             label = "32 位 APK",
             methodName = "app.upload.apk.app.32",
             part = request.task.artifact.split32,
+            progressKey = "upload:apk:32",
             upload = { fileName, bytes, md5 ->
                 remote.uploadApk32(accessKey, accessSecret, request.app.packageName, fileName, bytes, md5, environment = environment)
             },
             logs = logs,
+            request = request,
         )
         val upload64 = uploadSplitPart(
             label = "64 位 APK",
             methodName = "app.upload.apk.app.64",
             part = request.task.artifact.split64,
+            progressKey = "upload:apk:64",
             upload = { fileName, bytes, md5 ->
                 remote.uploadApk64(accessKey, accessSecret, request.app.packageName, fileName, bytes, md5, environment = environment)
             },
             logs = logs,
+            request = request,
         )
+        logs.emit(request, PublishTaskLog(LogLevel.Info, "开始提交 vivo 32/64 更新审核", PublishTaskStage.Submit))
         val submit = remote.syncUpdateSubpackageApp(
             accessKey = accessKey,
             accessSecret = accessSecret,
@@ -264,10 +298,13 @@ class VivoMarketPublisher(
             ),
             environment = environment,
         )
-        logs += PublishTaskLog(
-            level = LogLevel.Info,
-            message = "vivo 32/64 更新提交成功${submit.taskId?.let { "：taskId=$it" }.orEmpty()}",
-            stage = PublishTaskStage.Submit,
+        logs.emit(
+            request,
+            PublishTaskLog(
+                level = LogLevel.Info,
+                message = "vivo 32/64 更新提交成功${submit.taskId?.let { "：taskId=$it" }.orEmpty()}",
+                stage = PublishTaskStage.Submit,
+            ),
         )
         return MarketPublishResult(
             status = PublishTaskStatus.Submitted,
@@ -282,16 +319,39 @@ class VivoMarketPublisher(
         label: String,
         methodName: String,
         part: ArtifactPart,
+        progressKey: String,
         upload: suspend (String, ByteArray, String) -> VivoUploadResult,
         logs: MutableList<PublishTaskLog>,
+        request: MarketPublishRequest,
     ): String {
         val path = part.value.takeIf { it.isNotBlank() } ?: error("缺少 $label 文件")
         val md5 = part.md5.takeIf { it.isNotBlank() } ?: error("缺少 $label MD5")
+        logs.emit(request, PublishTaskLog(LogLevel.Info, "读取 $label 文件：${path.fileName()}", PublishTaskStage.Upload))
         val bytes = readFile(path).getOrElse { error("读取 $label 文件失败：${it.message ?: "未知错误"}") }
-        logs += PublishTaskLog(LogLevel.Info, "开始上传 $label：$methodName，${path.fileName()}", PublishTaskStage.Upload)
+        logs.emit(
+            request,
+            PublishTaskLog(
+                LogLevel.Info,
+                "开始上传 $label：$methodName，${path.fileName()}，${bytes.size.toLong().readableBytes()}",
+                PublishTaskStage.Upload,
+                progressPercent = 0,
+                progressKey = progressKey,
+                progressLabel = "$label 上传",
+            ),
+        )
         val result = upload(path.fileName(), bytes, md5)
         val serial = result.serialNumber ?: error("vivo 上传 $label 未返回 serialnumber")
-        logs += PublishTaskLog(LogLevel.Info, "$label 上传完成：serialnumber=$serial", PublishTaskStage.Upload)
+        logs.emit(
+            request,
+            PublishTaskLog(
+                LogLevel.Info,
+                "$label 上传完成：serialnumber=$serial",
+                PublishTaskStage.Upload,
+                progressPercent = 100,
+                progressKey = progressKey,
+                progressLabel = "$label 上传",
+            ),
+        )
         return serial
     }
 
@@ -350,6 +410,23 @@ private fun <T> Result<T>.mapFailureWithEnvironment(channel: ChannelRecord): Res
 
 private fun String.fileName(): String =
     trim().substringAfterLast('/').substringAfterLast('\\').ifBlank { "artifact.apk" }
+
+private fun MutableList<PublishTaskLog>.emit(
+    request: MarketPublishRequest,
+    log: PublishTaskLog,
+) {
+    add(log)
+    request.onLog(log)
+}
+
+private fun Long.readableBytes(): String {
+    val mb = this / (1024.0 * 1024.0)
+    return if (mb >= 1.0) {
+        "${(mb * 10).toInt() / 10.0} MB"
+    } else {
+        "${this / 1024} KB"
+    }
+}
 
 private fun Throwable.isUnsupportedSandboxAppDetail(): Boolean {
     val text = message.orEmpty()

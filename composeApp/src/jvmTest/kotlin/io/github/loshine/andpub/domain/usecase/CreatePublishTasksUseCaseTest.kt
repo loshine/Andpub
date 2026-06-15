@@ -11,8 +11,10 @@ import io.github.loshine.andpub.domain.model.MarketType
 import io.github.loshine.andpub.domain.model.PackageType
 import io.github.loshine.andpub.domain.model.PublishMode
 import io.github.loshine.andpub.domain.model.PublishTaskRecord
+import io.github.loshine.andpub.domain.model.PublishTaskStage
 import io.github.loshine.andpub.domain.model.PublishTaskStatus
 import io.github.loshine.andpub.platform.ArtifactDownloadTarget
+import io.github.loshine.andpub.platform.ArtifactTransferProgress
 import io.kotest.core.spec.style.StringSpec
 import io.kotest.matchers.collections.shouldContain
 import io.kotest.matchers.shouldBe
@@ -61,7 +63,7 @@ class CreatePublishTasksUseCaseTest : StringSpec({
         var downloadedUrl: String? = null
         var downloadTarget: ArtifactDownloadTarget? = null
         val useCase = CreatePublishTasksUseCase(
-            downloadUrlArtifact = { url, target ->
+            downloadUrlArtifact = { url, target, _ ->
                 downloadedUrl = url
                 downloadTarget = target
                 Result.success("/tmp/downloaded.apk")
@@ -96,10 +98,45 @@ class CreatePublishTasksUseCaseTest : StringSpec({
             "小米应用市场 不支持 URL 直传，已下载并检查后按本地文件上传"
     }
 
+    "adds download progress logs while preparing url artifact" {
+        val emittedLogs = mutableListOf<String>()
+        val useCase = CreatePublishTasksUseCase(
+            downloadUrlArtifact = { _, _, onProgress ->
+                onProgress(ArtifactTransferProgress(512, 1024))
+                onProgress(ArtifactTransferProgress(1024, 1024))
+                Result.success("/tmp/downloaded.apk")
+            },
+            inspectArtifact = { path, _, _ ->
+                Result.success(testInspection(path))
+            },
+        )
+        val channel = channel(MarketType.Xiaomi)
+        val snapshot = LocalStateSnapshot(
+            apps = listOf(app),
+            channels = listOf(channel),
+            unifiedArtifact = ArtifactDraft(
+                sourceType = ArtifactSourceType.Url,
+                value = "https://cdn.example.com/app.apk",
+            ),
+        )
+
+        val task = useCase(snapshot, app, listOf(channel)) { _, log ->
+            if (log.stage == PublishTaskStage.Download) emittedLogs += log.message
+        }.single()
+
+        emittedLogs.any { "50%" in it } shouldBe true
+        task.logs.any { it.stage == PublishTaskStage.Download && it.progressPercent == 100 } shouldBe true
+        task.logs.any {
+            it.stage == PublishTaskStage.Download &&
+                    it.progressKey == "download:apk:universal" &&
+                    it.progressLabel == "APK 下载"
+        } shouldBe true
+    }
+
     "downloads and inspects url artifact for markets with direct url upload" {
         var downloadCalled = false
         val useCase = CreatePublishTasksUseCase(
-            downloadUrlArtifact = { _, _ ->
+            downloadUrlArtifact = { _, _, _ ->
                 downloadCalled = true
                 Result.success("/tmp/downloaded.apk")
             },
@@ -131,7 +168,7 @@ class CreatePublishTasksUseCaseTest : StringSpec({
     "downloads bundle url artifacts into bundle cache target" {
         var downloadTarget: ArtifactDownloadTarget? = null
         val useCase = CreatePublishTasksUseCase(
-            downloadUrlArtifact = { _, target ->
+            downloadUrlArtifact = { _, target, _ ->
                 downloadTarget = target
                 Result.success("/tmp/downloaded.aab")
             },
@@ -162,7 +199,7 @@ class CreatePublishTasksUseCaseTest : StringSpec({
         val xiaomi = channel(MarketType.Xiaomi)
         val tencent = channel(MarketType.Tencent)
         val useCase = CreatePublishTasksUseCase(
-            downloadUrlArtifact = { url, _ ->
+            downloadUrlArtifact = { url, _, _ ->
                 downloadedUrls += url
                 if (url.endsWith("app-1.apk")) {
                     secondDownloadStarted.await()
@@ -205,7 +242,7 @@ class CreatePublishTasksUseCaseTest : StringSpec({
 
     "fails task when fallback download fails" {
         val useCase = CreatePublishTasksUseCase(
-            downloadUrlArtifact = { _, _ -> Result.failure(IllegalStateException("network down")) },
+            downloadUrlArtifact = { _, _, _ -> Result.failure(IllegalStateException("network down")) },
             inspectArtifact = { path, _, _ -> Result.success(testInspection(path)) },
         )
         val channel = channel(MarketType.Tencent)
@@ -230,7 +267,7 @@ class CreatePublishTasksUseCaseTest : StringSpec({
         val downloadedUrls = mutableListOf<String>()
         val downloadTargets = mutableListOf<ArtifactDownloadTarget>()
         val useCase = CreatePublishTasksUseCase(
-            downloadUrlArtifact = { url, target ->
+            downloadUrlArtifact = { url, target, _ ->
                 downloadedUrls += url
                 downloadTargets += target
                 Result.success("/tmp/${url.substringAfterLast("/")}")
@@ -275,7 +312,7 @@ class CreatePublishTasksUseCaseTest : StringSpec({
     "downloads split url artifacts for vivo and converts to local upload files" {
         val downloadedUrls = mutableListOf<String>()
         val useCase = CreatePublishTasksUseCase(
-            downloadUrlArtifact = { url, _ ->
+            downloadUrlArtifact = { url, _, _ ->
                 downloadedUrls += url
                 Result.success("/tmp/${url.substringAfterLast("/")}")
             },
@@ -315,9 +352,93 @@ class CreatePublishTasksUseCaseTest : StringSpec({
             "vivo 应用市场 不支持 URL 直传，64 位 APK 已下载并检查后按本地文件上传"
     }
 
+    "downloads split url parts concurrently within one channel" {
+        val download32Started = CompletableDeferred<Unit>()
+        val download64Started = CompletableDeferred<Unit>()
+        val useCase = CreatePublishTasksUseCase(
+            downloadUrlArtifact = { url, _, onProgress ->
+                if (url.endsWith("app-32.apk")) {
+                    download32Started.complete(Unit)
+                    download64Started.await()
+                    onProgress(ArtifactTransferProgress(1024, 1024))
+                } else {
+                    download64Started.complete(Unit)
+                    download32Started.await()
+                    onProgress(ArtifactTransferProgress(2048, 2048))
+                }
+                Result.success("/tmp/${url.substringAfterLast("/")}")
+            },
+            inspectArtifact = { path, _, _ ->
+                Result.success(testInspection(path))
+            },
+        )
+        val channel = channel(MarketType.Vivo)
+        val snapshot = LocalStateSnapshot(
+            apps = listOf(app),
+            channels = listOf(channel),
+            unifiedArtifact = ArtifactDraft(
+                packageType = PackageType.SplitApk,
+                split32 = ArtifactPart(value = "https://cdn.example.com/app-32.apk"),
+                split64 = ArtifactPart(value = "https://cdn.example.com/app-64.apk"),
+            ),
+        )
+
+        val task = withTimeout(1_000) {
+            useCase(snapshot, app, listOf(channel)).single()
+        }
+
+        task.status shouldBe PublishTaskStatus.Ready
+        task.logs.any {
+            it.progressKey == "download:apk:32" &&
+                    it.progressLabel == "32 位 APK 下载" &&
+                    it.progressPercent == 100
+        } shouldBe true
+        task.logs.any {
+            it.progressKey == "download:apk:64" &&
+                    it.progressLabel == "64 位 APK 下载" &&
+                    it.progressPercent == 100
+        } shouldBe true
+    }
+
+    "downloads split url parts even when top-level source type is local file" {
+        val downloadedUrls = mutableListOf<String>()
+        val useCase = CreatePublishTasksUseCase(
+            downloadUrlArtifact = { url, _, _ ->
+                downloadedUrls += url
+                Result.success("/tmp/${url.substringAfterLast("/")}")
+            },
+            inspectArtifact = { path, _, _ ->
+                Result.success(testInspection(path))
+            },
+        )
+        val channel = channel(MarketType.Vivo)
+        val snapshot = LocalStateSnapshot(
+            apps = listOf(app),
+            channels = listOf(channel),
+            unifiedArtifact = ArtifactDraft(
+                packageType = PackageType.SplitApk,
+                split32 = ArtifactPart(value = "https://cdn.example.com/app-32.apk"),
+                split64 = ArtifactPart(value = "https://cdn.example.com/app-64.apk"),
+            ),
+        )
+
+        val task = useCase(snapshot, app, listOf(channel)).single()
+
+        downloadedUrls shouldBe listOf(
+            "https://cdn.example.com/app-32.apk",
+            "https://cdn.example.com/app-64.apk",
+        )
+        task.status shouldBe PublishTaskStatus.Ready
+        task.artifact.sourceType shouldBe ArtifactSourceType.LocalFile
+        task.artifact.split32.value shouldBe "/tmp/app-32.apk"
+        task.artifact.split32.md5 shouldBe "md5"
+        task.artifact.split64.value shouldBe "/tmp/app-64.apk"
+        task.artifact.split64.md5 shouldBe "md5"
+    }
+
     "fails url task when downloaded artifact has no manifest package" {
         val useCase = CreatePublishTasksUseCase(
-            downloadUrlArtifact = { _, _ -> Result.success("/tmp/downloaded.apk") },
+            downloadUrlArtifact = { _, _, _ -> Result.success("/tmp/downloaded.apk") },
             inspectArtifact = { path, _, _ ->
                 Result.success(noManifestInspection(path))
             },

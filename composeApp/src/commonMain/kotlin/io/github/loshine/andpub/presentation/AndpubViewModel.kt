@@ -722,7 +722,12 @@ class AndpubViewModel(
                     )
                     replacePublishTasksForApp(app.id, pendingTasks)
 
-                    val tasks = createPublishTaskRecords(state.snapshot, app, state.publishTargetChannels)
+                    val tasks = createPublishTaskRecords(
+                        snapshot = state.snapshot,
+                        app = app,
+                        channels = state.publishTargetChannels,
+                        onTaskLog = ::appendPublishTaskLog,
+                    )
                     replacePublishTasksForApp(app.id, tasks)
                     tasks.map { task ->
                         val channel = state.publishTargetChannels.firstOrNull { it.id == task.channelId }
@@ -745,6 +750,7 @@ class AndpubViewModel(
                                 channel = channel,
                                 task = runningTask,
                                 vivoOptions = vivoOptions,
+                                onTaskLog = { log -> appendPublishTaskLog(runningTask.id, log) },
                             ).also { updatePublishTask(it) }
                         }
                     }
@@ -846,6 +852,21 @@ class AndpubViewModel(
                     if (item.id == task.id) task else item
                 }
             )
+        }
+    }
+
+    private fun appendPublishTaskLog(
+        taskId: String,
+        log: PublishTaskLog,
+    ) {
+        viewModelScope.launch {
+            updateState {
+                it.copy(
+                    publishTasks = it.publishTasks.map { item ->
+                        if (item.id == taskId) item.copy(logs = item.logs + log) else item
+                    }
+                )
+            }
         }
     }
 
@@ -1007,7 +1028,7 @@ private fun buildMarketVersionReport(
     channels: List<ChannelRecord>,
 ): String =
     buildString {
-        appendLine("**应用市场版本巡检**")
+        appendLine("**应用市场提审通知**")
         appendLine("> 应用：${app.name}")
         appendLine("> 包名：${app.packageName}")
         appendLine()
@@ -1019,7 +1040,8 @@ private fun buildMarketVersionReport(
                 appendLine("- 错误：${channel.lastError ?: "未知错误"}")
             } else {
                 appendLine("- 线上版本：${info.onlineVersion ?: "-"}")
-                appendLine("- 上架状态：${info.releaseStatus ?: "其它状态"}")
+                appendLine("- 正在审核版本：${info.reviewingVersion ?: "-"}")
+                appendLine("- 审核状态：${info.auditStatus ?: "-"}")
             }
             appendLine()
         }

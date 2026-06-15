@@ -208,7 +208,7 @@ class MarketRemoteDataSourceContractTest : StringSpec({
 
         val result = WeComWebhookRemoteDataSource(mock.client).sendMarkdown(
             webhookUrl = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=robot-key",
-            content = "**应用市场版本巡检**",
+            content = "**应用市场提审通知**",
         )
 
         result.errorCode shouldBe 0
@@ -217,7 +217,7 @@ class MarketRemoteDataSourceContractTest : StringSpec({
         request.url.encodedPath shouldBe "/cgi-bin/webhook/send"
         val body = request.bodyText()
         body shouldContain "\"msgtype\":\"markdown\""
-        body shouldContain "应用市场版本巡检"
+        body shouldContain "应用市场提审通知"
     }
 
     "Xiaomi query signs RequestData and posts to the legacy dev query endpoint" {

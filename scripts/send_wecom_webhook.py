@@ -15,7 +15,7 @@ def format_markdown(data: dict) -> str:
     app_name = data["app"]["name"]
     package_name = data["app"]["packageName"]
     lines = [
-        f"## {app_name} 各市场版本状态",
+        f"## {app_name} 应用市场提审通知",
         f"包名：`{package_name}`\n",
     ]
     for r in data["results"]:
@@ -24,11 +24,11 @@ def format_markdown(data: dict) -> str:
             online = r["onlineVersion"] or "-"
             reviewing = r["reviewingVersion"] or "-"
             audit = r["auditStatus"] or "-"
-            release = r["releaseStatus"] or "-"
             lines.append(f"**{r['name']}** [{status}]")
-            lines.append(f"> 线上版本: {online} | 审核版本: {reviewing}")
+            lines.append(f"> 线上版本: {online}")
+            lines.append(f"> 正在审核版本: {reviewing}")
             lines.append(f"> 审核状态: {audit}")
-            lines.append(f"> 发布状态: {release}\n")
+            lines.append("")
         else:
             lines.append(f"**{r['name']}** [{status}]")
             lines.append(f"> 错误: {r['error']}\n")

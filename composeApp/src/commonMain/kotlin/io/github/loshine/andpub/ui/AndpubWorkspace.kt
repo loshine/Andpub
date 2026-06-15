@@ -29,6 +29,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedCard
@@ -73,7 +74,9 @@ import io.github.loshine.andpub.domain.model.MarketCapability
 import io.github.loshine.andpub.domain.model.MarketType
 import io.github.loshine.andpub.domain.model.PackageType
 import io.github.loshine.andpub.domain.model.PublishMode
+import io.github.loshine.andpub.domain.model.PublishTaskLog
 import io.github.loshine.andpub.domain.model.PublishTaskRecord
+import io.github.loshine.andpub.domain.model.PublishTaskStage
 import io.github.loshine.andpub.domain.model.PublishTaskStatus
 import io.github.loshine.andpub.domain.model.SplitApkSlot
 import io.github.loshine.andpub.domain.model.ToolSettings
@@ -989,6 +992,7 @@ private fun PublishProcessCard(
             }
 
             if (showDetailLogs) {
+                PublishProgressRows(task.latestProgressLogs(PublishTaskStage.Download, PublishTaskStage.Upload))
                 task.logs.forEach { log ->
                     val stage = log.stage?.let { "[${it.displayName}] " }.orEmpty()
                     Text(
@@ -998,9 +1002,17 @@ private fun PublishProcessCard(
                     )
                 }
             } else {
-                PublishProcessSection("下载相关信息", task.downloadSummary())
+                PublishProcessSection(
+                    title = "下载相关信息",
+                    lines = task.downloadSummary(),
+                    progressLogs = task.latestProgressLogs(PublishTaskStage.Download),
+                )
                 PublishProcessSection("校验相关信息", task.validationSummary())
-                PublishProcessSection("发布相关信息", task.publishSummary())
+                PublishProcessSection(
+                    title = "发布相关信息",
+                    lines = task.publishSummary(),
+                    progressLogs = task.latestProgressLogs(PublishTaskStage.Upload),
+                )
             }
         }
     }
@@ -1014,11 +1026,35 @@ private fun PublishTaskRecord.canRefreshPublishStatus(): Boolean =
 private fun PublishProcessSection(
     title: String,
     lines: List<String>,
+    progressLogs: List<PublishTaskLog> = emptyList(),
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text(title, style = MaterialTheme.typography.titleSmall)
         lines.forEach {
             Text(it, style = MaterialTheme.typography.bodySmall)
+        }
+        PublishProgressRows(progressLogs)
+    }
+}
+
+@Composable
+private fun PublishProgressRows(logs: List<PublishTaskLog>) {
+    logs.forEach { log ->
+        val percent = log.progressPercent ?: return@forEach
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(log.progressLabel ?: log.message, style = MaterialTheme.typography.bodySmall)
+                Text("$percent%", style = MaterialTheme.typography.labelSmall)
+            }
+            LinearProgressIndicator(
+                progress = { percent / 100f },
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Text(log.message, style = MaterialTheme.typography.bodySmall)
         }
     }
 }
@@ -2109,12 +2145,12 @@ private fun PublishTaskRecord.downloadSummary(): List<String> =
             "32 位本地：${artifact.split32.downloadedPath.ifBlank { "-" }}",
             "64 位来源：${artifact.split64.value.ifBlank { "-" }}",
             "64 位本地：${artifact.split64.downloadedPath.ifBlank { "-" }}",
-        )
+        ) + latestStageMessages(PublishTaskStage.Download)
     } else {
         listOf(
             "来源：${artifact.value.ifBlank { "-" }}",
             "本地：${artifact.downloadedPath.ifBlank { "-" }}",
-        )
+        ) + latestStageMessages(PublishTaskStage.Download)
     }
 
 private fun PublishTaskRecord.validationSummary(): List<String> {
@@ -2148,7 +2184,7 @@ private fun PublishTaskRecord.publishSummary(): List<String> =
         )
         PublishTaskStatus.Created -> listOf("已创建：等待检查")
         PublishTaskStatus.Validating -> listOf("检查中：正在准备产物")
-        PublishTaskStatus.Uploading -> listOf("上传中：正在调用厂商上传接口")
+        PublishTaskStatus.Uploading -> listOf("上传中：正在调用厂商上传接口") + latestStageMessages(PublishTaskStage.Upload, PublishTaskStage.Submit)
         PublishTaskStatus.Submitted -> buildList {
             add("已提交：等待厂商处理")
             vendorTaskId?.let { add("任务 ID：$it") }
@@ -2160,6 +2196,46 @@ private fun PublishTaskRecord.publishSummary(): List<String> =
             if (vendorUploadIds.isNotEmpty()) add("上传流水号：${vendorUploadIds.joinToString()}")
         }
     }
+
+private fun PublishTaskRecord.latestProgressLogs(
+    vararg stages: PublishTaskStage,
+): List<PublishTaskLog> {
+    if (status !in listOf(PublishTaskStatus.Validating, PublishTaskStatus.Uploading)) {
+        return emptyList()
+    }
+    return logs
+        .filter { log ->
+            log.stage in stages &&
+                    log.progressPercent != null &&
+                    (log.progressKey != null || log.progressLabel != null)
+        }
+        .groupBy { it.progressKey ?: "${it.stage}:${it.progressLabel}" }
+        .values
+        .mapNotNull { it.lastOrNull() }
+        .sortedBy { it.progressSortOrder() }
+}
+
+private fun PublishTaskLog.progressSortOrder(): Int =
+    when (progressKey) {
+        "download:bundle" -> 10
+        "download:apk:universal" -> 20
+        "download:apk:32" -> 30
+        "download:apk:64" -> 40
+        "upload:apk:universal" -> 50
+        "upload:apk:32" -> 60
+        "upload:apk:64" -> 70
+        else -> Int.MAX_VALUE
+    }
+
+private fun PublishTaskRecord.latestStageMessages(
+    vararg stages: PublishTaskStage,
+): List<String> =
+    logs.asReversed()
+        .filter { it.stage in stages && it.progressPercent == null }
+        .distinctBy { it.message }
+        .take(2)
+        .map { it.message }
+        .asReversed()
 
 @Composable
 private fun LogLevel.color() =

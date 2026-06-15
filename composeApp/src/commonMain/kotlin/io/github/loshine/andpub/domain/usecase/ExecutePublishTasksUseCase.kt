@@ -23,6 +23,7 @@ class ExecutePublishTasksUseCase(
         channels: List<ChannelRecord>,
         tasks: List<PublishTaskRecord>,
         vivoOptions: VivoPublishOptions,
+        onTaskLog: (String, PublishTaskLog) -> Unit = { _, _ -> },
     ): List<PublishTaskRecord> {
         val channelMap = channels.associateBy { it.id }
         return tasks.map { task ->
@@ -30,7 +31,7 @@ class ExecutePublishTasksUseCase(
             when {
                 task.status == PublishTaskStatus.Failed -> task
                 channel == null -> task.failed("渠道不存在")
-                else -> invoke(app, channel, task, vivoOptions)
+                else -> invoke(app, channel, task, vivoOptions) { log -> onTaskLog(task.id, log) }
             }
         }
     }
@@ -40,6 +41,7 @@ class ExecutePublishTasksUseCase(
         channel: ChannelRecord,
         task: PublishTaskRecord,
         vivoOptions: VivoPublishOptions,
+        onTaskLog: (PublishTaskLog) -> Unit = {},
     ): PublishTaskRecord {
         if (task.status == PublishTaskStatus.Failed) return task
         val publisher = publisherMap[channel.marketType]
@@ -50,6 +52,7 @@ class ExecutePublishTasksUseCase(
                 channel = channel,
                 task = task,
                 vivoOptions = vivoOptions,
+                onLog = onTaskLog,
             )
         ).fold(
             onSuccess = { result ->

@@ -10,6 +10,13 @@ data class ArtifactDownloadTarget(
     val variantFolder: String? = null,
 )
 
+data class ArtifactTransferProgress(
+    val bytesTransferred: Long,
+    val totalBytes: Long?,
+)
+
+expect fun currentPublishTimeFolder(): String
+
 expect suspend fun pickArtifactFilePath(): String?
 
 expect suspend fun inspectToolSettings(
@@ -26,6 +33,7 @@ expect suspend fun inspectLocalArtifact(
 expect suspend fun downloadArtifactFromUrl(
     url: String,
     target: ArtifactDownloadTarget,
+    onProgress: (ArtifactTransferProgress) -> Unit,
 ): Result<String>
 
 expect suspend fun readBinaryFile(path: String): Result<ByteArray>

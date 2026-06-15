@@ -277,6 +277,9 @@ data class PublishTaskLog(
     val level: LogLevel,
     val message: String,
     val stage: PublishTaskStage? = null,
+    val progressPercent: Int? = null,
+    val progressKey: String? = null,
+    val progressLabel: String? = null,
 )
 
 data class MarketPublishRequest(
@@ -284,6 +287,7 @@ data class MarketPublishRequest(
     val channel: ChannelRecord,
     val task: PublishTaskRecord,
     val vivoOptions: VivoPublishOptions = VivoPublishOptions(),
+    val onLog: (PublishTaskLog) -> Unit = {},
 )
 
 data class MarketPublishResult(

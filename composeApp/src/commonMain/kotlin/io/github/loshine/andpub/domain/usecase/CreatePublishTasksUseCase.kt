@@ -18,15 +18,16 @@ import io.github.loshine.andpub.domain.model.PublishTaskStage
 import io.github.loshine.andpub.domain.model.PublishTaskStatus
 import io.github.loshine.andpub.domain.model.ToolSettings
 import io.github.loshine.andpub.platform.ArtifactDownloadTarget
+import io.github.loshine.andpub.platform.ArtifactTransferProgress
+import io.github.loshine.andpub.platform.currentPublishTimeFolder
 import io.github.loshine.andpub.platform.downloadArtifactFromUrl
 import io.github.loshine.andpub.platform.inspectLocalArtifact
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
-import kotlin.time.Clock
 
 class CreatePublishTasksUseCase(
-    private val downloadUrlArtifact: suspend (String, ArtifactDownloadTarget) -> Result<String> = ::downloadArtifactFromUrl,
+    private val downloadUrlArtifact: suspend (String, ArtifactDownloadTarget, (ArtifactTransferProgress) -> Unit) -> Result<String> = ::downloadArtifactFromUrl,
     private val inspectArtifact: suspend (String, String, String) -> Result<ArtifactInspection> = ::inspectLocalArtifact,
 ) {
     fun createPendingTasks(
@@ -59,6 +60,7 @@ class CreatePublishTasksUseCase(
         snapshot: LocalStateSnapshot,
         app: AppRecord,
         channels: List<ChannelRecord>,
+        onTaskLog: (String, PublishTaskLog) -> Unit = { _, _ -> },
     ): List<PublishTaskRecord> = coroutineScope {
         var nextId = snapshot.nextAvailableId()
         val publishTimeFolder = currentPublishTimeFolder()
@@ -71,6 +73,7 @@ class CreatePublishTasksUseCase(
                     channel = channel,
                     taskId = taskId,
                     publishTimeFolder = publishTimeFolder,
+                    onTaskLog = onTaskLog,
                 )
             }
         }.awaitAll()
@@ -82,10 +85,13 @@ class CreatePublishTasksUseCase(
         channel: ChannelRecord,
         taskId: String,
         publishTimeFolder: String,
+        onTaskLog: (String, PublishTaskLog) -> Unit,
     ): PublishTaskRecord {
         val artifact = snapshot.artifactFor(channel)
         val prepared = runCatching {
-            prepareArtifact(channel, artifact, snapshot.toolSettings, publishTimeFolder)
+            prepareArtifact(channel, artifact, snapshot.toolSettings, publishTimeFolder) { log ->
+                onTaskLog(taskId, log)
+            }
         }.getOrElse {
             PreparedArtifact(
                 artifact = artifact,
@@ -119,30 +125,57 @@ class CreatePublishTasksUseCase(
         artifact: ArtifactDraft,
         toolSettings: ToolSettings,
         publishTimeFolder: String,
+        onProgressLog: (PublishTaskLog) -> Unit,
     ): PreparedArtifact {
         val capability = MarketDefinitions.schemaOf(channel.marketType).capability
-        if (
-            artifact.sourceType != ArtifactSourceType.Url ||
-            !artifact.packageType.isSupportedBy(capability)
-        ) {
+        if (!artifact.packageType.isSupportedBy(capability)) {
             return PreparedArtifact(artifact)
         }
         if (artifact.packageType == PackageType.SplitApk) {
-            return prepareSplitUrlArtifact(channel, artifact, capability, toolSettings, publishTimeFolder)
+            return prepareSplitUrlArtifact(channel, artifact, capability, toolSettings, publishTimeFolder, onProgressLog)
+        }
+        if (artifact.sourceType != ArtifactSourceType.Url) {
+            return PreparedArtifact(artifact)
         }
         if (!artifact.value.isHttpUrl()) {
             return PreparedArtifact(artifact)
         }
 
         val originalUrl = artifact.value
+        val progressKey = artifact.downloadProgressKey()
+        val progressLabel = artifact.downloadProgressLabel()
+        val progressLogs = mutableListOf<PublishTaskLog>()
+        val emitProgressLog = { log: PublishTaskLog ->
+            progressLogs += log
+            onProgressLog(log)
+        }
+        emitProgressLog(
+            PublishTaskLog(
+                level = LogLevel.Info,
+                message = "${channel.marketType.displayName} 开始下载 URL 产物",
+                stage = PublishTaskStage.Download,
+                progressPercent = 0,
+                progressKey = progressKey,
+                progressLabel = progressLabel,
+            )
+        )
         val downloadResult = downloadUrlArtifact(
             originalUrl,
             artifact.downloadTarget(channel, publishTimeFolder),
-        )
+        ) {
+            emitProgressLog(
+                downloadProgressLog(
+                    progressKey = progressKey,
+                    progressLabel = progressLabel,
+                    messageLabel = "${channel.marketType.displayName} URL 产物",
+                    progress = it,
+                )
+            )
+        }
         val localPath = downloadResult.getOrElse {
             return PreparedArtifact(
                 artifact = artifact,
-                logs = listOf(
+                logs = progressLogs + listOf(
                     PublishTaskLog(
                         LogLevel.Error,
                         "${channel.marketType.displayName} URL 产物下载检查失败：${it.message ?: "未知错误"}",
@@ -165,7 +198,7 @@ class CreatePublishTasksUseCase(
                     } else {
                         artifact.withDownloadedInspection(localPath, it)
                     },
-                    logs = listOf(
+                    logs = progressLogs + listOf(
                         PublishTaskLog(
                             LogLevel.Info,
                             if (uploadByUrl) {
@@ -193,7 +226,7 @@ class CreatePublishTasksUseCase(
                             message = "URL 已下载，产物解析失败：${it.message ?: "未知错误"}",
                         )
                     },
-                    logs = listOf(
+                    logs = progressLogs + listOf(
                         PublishTaskLog(
                             LogLevel.Error,
                             "${channel.marketType.displayName} URL 产物已下载但检查失败：${it.message ?: "未知错误"}",
@@ -210,29 +243,39 @@ class CreatePublishTasksUseCase(
         capability: MarketCapability,
         toolSettings: ToolSettings,
         publishTimeFolder: String,
+        onProgressLog: (PublishTaskLog) -> Unit,
     ): PreparedArtifact {
         if (!artifact.split32.value.isHttpUrl() || !artifact.split64.value.isHttpUrl()) {
             return PreparedArtifact(artifact)
         }
 
-        val downloaded32 = downloadSplitPart(
-            channel = channel,
-            slotName = "32 位 APK",
-            part = artifact.split32,
-            uploadByUrl = capability.supportsUserUrl,
-            toolSettings = toolSettings,
-            publishTimeFolder = publishTimeFolder,
-            variantFolder = "32",
-        )
-        val downloaded64 = downloadSplitPart(
-            channel = channel,
-            slotName = "64 位 APK",
-            part = artifact.split64,
-            uploadByUrl = capability.supportsUserUrl,
-            toolSettings = toolSettings,
-            publishTimeFolder = publishTimeFolder,
-            variantFolder = "64",
-        )
+        val (downloaded32, downloaded64) = coroutineScope {
+            val part32 = async {
+                downloadSplitPart(
+                    channel = channel,
+                    slotName = "32 位 APK",
+                    part = artifact.split32,
+                    uploadByUrl = capability.supportsUserUrl,
+                    toolSettings = toolSettings,
+                    publishTimeFolder = publishTimeFolder,
+                    variantFolder = "32",
+                    onProgressLog = onProgressLog,
+                )
+            }
+            val part64 = async {
+                downloadSplitPart(
+                    channel = channel,
+                    slotName = "64 位 APK",
+                    part = artifact.split64,
+                    uploadByUrl = capability.supportsUserUrl,
+                    toolSettings = toolSettings,
+                    publishTimeFolder = publishTimeFolder,
+                    variantFolder = "64",
+                    onProgressLog = onProgressLog,
+                )
+            }
+            part32.await() to part64.await()
+        }
         val logs = downloaded32.logs + downloaded64.logs
         if (logs.any { it.level == LogLevel.Error }) {
             return PreparedArtifact(artifact, logs)
@@ -255,19 +298,46 @@ class CreatePublishTasksUseCase(
         toolSettings: ToolSettings,
         publishTimeFolder: String,
         variantFolder: String,
+        onProgressLog: (PublishTaskLog) -> Unit,
     ): PreparedSplitPart {
         if (!part.value.isHttpUrl()) {
             return PreparedSplitPart(part)
         }
 
         val originalUrl = part.value
+        val progressKey = splitDownloadProgressKey(variantFolder)
+        val progressLabel = "$slotName 下载"
+        val progressLogs = mutableListOf<PublishTaskLog>()
+        val emitProgressLog = { log: PublishTaskLog ->
+            progressLogs += log
+            onProgressLog(log)
+        }
+        emitProgressLog(
+            PublishTaskLog(
+                level = LogLevel.Info,
+                message = "${channel.marketType.displayName} $slotName 开始下载",
+                stage = PublishTaskStage.Download,
+                progressPercent = 0,
+                progressKey = progressKey,
+                progressLabel = progressLabel,
+            )
+        )
         val localPath = downloadUrlArtifact(
             originalUrl,
             splitDownloadTarget(channel, publishTimeFolder, variantFolder),
-        ).getOrElse {
+        ) {
+            emitProgressLog(
+                downloadProgressLog(
+                    progressKey = progressKey,
+                    progressLabel = progressLabel,
+                    messageLabel = "${channel.marketType.displayName} $slotName",
+                    progress = it,
+                )
+            )
+        }.getOrElse {
             return PreparedSplitPart(
                 part = part,
-                logs = listOf(
+                logs = progressLogs + listOf(
                     PublishTaskLog(
                         LogLevel.Error,
                         "${channel.marketType.displayName} $slotName URL 下载检查失败：${it.message ?: "未知错误"}",
@@ -288,7 +358,7 @@ class CreatePublishTasksUseCase(
                     } else {
                         ArtifactPart().withDownloadedInspection(localPath, it)
                     },
-                    logs = listOf(
+                    logs = progressLogs + listOf(
                         PublishTaskLog(
                             LogLevel.Info,
                             if (uploadByUrl) {
@@ -314,7 +384,7 @@ class CreatePublishTasksUseCase(
                             message = "URL 已下载，产物解析失败：${it.message ?: "未知错误"}",
                         )
                     },
-                    logs = listOf(
+                    logs = progressLogs + listOf(
                         PublishTaskLog(
                             LogLevel.Error,
                             "${channel.marketType.displayName} $slotName URL 已下载但检查失败：${it.message ?: "未知错误"}",
@@ -554,6 +624,39 @@ class CreatePublishTasksUseCase(
         }?.plus(1) ?: 1
     }
 
+    private fun downloadProgressLog(
+        progressKey: String,
+        progressLabel: String,
+        messageLabel: String,
+        progress: ArtifactTransferProgress,
+    ): PublishTaskLog {
+        val percent = progress.percent()
+        val totalText = progress.totalBytes?.let { " / ${it.readableBytes()}" }.orEmpty()
+        val percentText = percent?.let { " ($it%)" }.orEmpty()
+        return PublishTaskLog(
+            level = LogLevel.Info,
+            message = "$messageLabel 下载中：${progress.bytesTransferred.readableBytes()}$totalText$percentText",
+            stage = PublishTaskStage.Download,
+            progressPercent = percent,
+            progressKey = progressKey,
+            progressLabel = progressLabel,
+        )
+    }
+
+    private fun ArtifactTransferProgress.percent(): Int? {
+        val total = totalBytes?.takeIf { it > 0L } ?: return null
+        return ((bytesTransferred * 100) / total).coerceIn(0, 100).toInt()
+    }
+
+    private fun Long.readableBytes(): String {
+        val mb = this / (1024.0 * 1024.0)
+        return if (mb >= 1.0) {
+            "${(mb * 10).toInt() / 10.0} MB"
+        } else {
+            "${this / 1024} KB"
+        }
+    }
+
     private fun ArtifactDraft.downloadTarget(
         channel: ChannelRecord,
         publishTimeFolder: String,
@@ -573,6 +676,23 @@ class CreatePublishTasksUseCase(
             },
         )
 
+    private fun ArtifactDraft.downloadProgressKey(): String =
+        when (packageType) {
+            PackageType.Aab -> "download:bundle"
+            PackageType.Apk -> "download:apk:universal"
+            PackageType.SplitApk -> "download:apk:split"
+        }
+
+    private fun ArtifactDraft.downloadProgressLabel(): String =
+        when (packageType) {
+            PackageType.Aab -> "Bundle 下载"
+            PackageType.Apk -> "APK 下载"
+            PackageType.SplitApk -> "APK 下载"
+        }
+
+    private fun splitDownloadProgressKey(variantFolder: String): String =
+        "download:apk:$variantFolder"
+
     private fun splitDownloadTarget(
         channel: ChannelRecord,
         publishTimeFolder: String,
@@ -584,10 +704,6 @@ class CreatePublishTasksUseCase(
             artifactFolder = "apk",
             variantFolder = variantFolder,
         )
-
-    private fun currentPublishTimeFolder(): String {
-        return Clock.System.now().toEpochMilliseconds().toString()
-    }
 
     private data class PreparedArtifact(
         val artifact: ArtifactDraft,

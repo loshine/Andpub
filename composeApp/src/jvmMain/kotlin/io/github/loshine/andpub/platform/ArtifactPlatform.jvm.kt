@@ -6,10 +6,15 @@ import java.io.File
 import java.net.HttpURLConnection
 import java.net.URI
 import java.security.MessageDigest
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
 import java.util.zip.ZipFile
 import javax.swing.JFileChooser
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+
+actual fun currentPublishTimeFolder(): String =
+    LocalDateTime.now().format(PUBLISH_TIME_FOLDER_FORMATTER)
 
 actual suspend fun pickArtifactFilePath(): String? = withContext(Dispatchers.Default) {
     val chooser = JFileChooser()
@@ -87,6 +92,7 @@ actual suspend fun inspectLocalArtifact(
 actual suspend fun downloadArtifactFromUrl(
     url: String,
     target: ArtifactDownloadTarget,
+    onProgress: (ArtifactTransferProgress) -> Unit,
 ): Result<String> =
     runCatching {
         withContext(Dispatchers.IO) {
@@ -103,12 +109,27 @@ actual suspend fun downloadArtifactFromUrl(
                     "下载失败，HTTP ${connection.responseCode}"
                 }
             }
+            val totalBytes = connection.contentLengthLong.takeIf { it >= 0L }
+            var downloadedBytes = 0L
+            var nextProgressBytes = 0L
+            onProgress(ArtifactTransferProgress(downloadedBytes, totalBytes))
             connection.getInputStream().use { input ->
                 targetFile.outputStream().use { output ->
-                    input.copyTo(output)
+                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read < 0) break
+                        output.write(buffer, 0, read)
+                        downloadedBytes += read
+                        if (downloadedBytes >= nextProgressBytes || downloadedBytes == totalBytes) {
+                            onProgress(ArtifactTransferProgress(downloadedBytes, totalBytes))
+                            nextProgressBytes = downloadedBytes + DOWNLOAD_PROGRESS_INTERVAL_BYTES
+                        }
+                    }
                 }
             }
             require(targetFile.length() > 0) { "下载到的文件为空" }
+            onProgress(ArtifactTransferProgress(targetFile.length(), totalBytes ?: targetFile.length()))
             targetFile.absolutePath
         }
     }
@@ -231,6 +252,11 @@ private fun String.safePathSegment(): String =
         .replace(Regex("[^A-Za-z0-9._-]+"), "-")
         .trim('-')
         .ifBlank { "unknown" }
+
+private val PUBLISH_TIME_FOLDER_FORMATTER: DateTimeFormatter =
+    DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss-SSS")
+
+private const val DOWNLOAD_PROGRESS_INTERVAL_BYTES = 1024L * 1024L
 
 private fun runCommand(command: List<String>): String {
     val process = ProcessBuilder(command)

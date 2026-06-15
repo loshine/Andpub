@@ -3,6 +3,9 @@ package io.github.loshine.andpub.platform
 import io.github.loshine.andpub.domain.model.ArtifactInspection
 import io.github.loshine.andpub.domain.model.ToolStatus
 
+actual fun currentPublishTimeFolder(): String =
+    kotlin.time.Clock.System.now().toString()
+
 actual suspend fun pickArtifactFilePath(): String? = null
 
 actual suspend fun inspectToolSettings(
@@ -25,6 +28,7 @@ actual suspend fun inspectLocalArtifact(
 actual suspend fun downloadArtifactFromUrl(
     url: String,
     target: ArtifactDownloadTarget,
+    onProgress: (ArtifactTransferProgress) -> Unit,
 ): Result<String> =
     Result.failure(UnsupportedOperationException("Android 端暂未接入 URL 产物下载"))
 
