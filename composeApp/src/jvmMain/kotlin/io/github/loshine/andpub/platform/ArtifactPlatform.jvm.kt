@@ -84,12 +84,15 @@ actual suspend fun inspectLocalArtifact(
         }
     }
 
-actual suspend fun downloadArtifactFromUrl(url: String): Result<String> =
+actual suspend fun downloadArtifactFromUrl(
+    url: String,
+    target: ArtifactDownloadTarget,
+): Result<String> =
     runCatching {
         withContext(Dispatchers.IO) {
             val uri = URI(url)
             require(uri.scheme == "http" || uri.scheme == "https") { "URL 仅支持 http/https" }
-            val target = createDownloadedArtifactFile(uri)
+            val targetFile = createDownloadedArtifactFile(uri, target)
             val connection = uri.toURL().openConnection().apply {
                 connectTimeout = 15_000
                 readTimeout = 120_000
@@ -101,12 +104,12 @@ actual suspend fun downloadArtifactFromUrl(url: String): Result<String> =
                 }
             }
             connection.getInputStream().use { input ->
-                target.outputStream().use { output ->
+                targetFile.outputStream().use { output ->
                     input.copyTo(output)
                 }
             }
-            require(target.length() > 0) { "下载到的文件为空" }
-            target.absolutePath
+            require(targetFile.length() > 0) { "下载到的文件为空" }
+            targetFile.absolutePath
         }
     }
 
@@ -201,18 +204,33 @@ private fun findAapt2(configuredSdkPath: String): File? {
         .firstOrNull()
 }
 
-private fun createDownloadedArtifactFile(uri: URI): File {
+private fun createDownloadedArtifactFile(
+    uri: URI,
+    target: ArtifactDownloadTarget,
+): File {
     val path = uri.path.orEmpty()
     val suffix = when {
         path.endsWith(".apk", ignoreCase = true) -> ".apk"
         path.endsWith(".aab", ignoreCase = true) -> ".aab"
         else -> ".bin"
     }
-    val dir = File(System.getProperty("java.io.tmpdir"), "andpub-url-artifacts").apply {
+    val dir = buildList {
+        add(File(System.getProperty("user.home"), ".andpub"))
+        add(File(last(), target.marketFolder.safePathSegment()))
+        add(File(last(), target.publishTimeFolder.safePathSegment()))
+        add(File(last(), target.artifactFolder.safePathSegment()))
+        target.variantFolder?.let { add(File(last(), it.safePathSegment())) }
+    }.last().apply {
         mkdirs()
     }
     return File.createTempFile("artifact-", suffix, dir)
 }
+
+private fun String.safePathSegment(): String =
+    trim()
+        .replace(Regex("[^A-Za-z0-9._-]+"), "-")
+        .trim('-')
+        .ifBlank { "unknown" }
 
 private fun runCommand(command: List<String>): String {
     val process = ProcessBuilder(command)

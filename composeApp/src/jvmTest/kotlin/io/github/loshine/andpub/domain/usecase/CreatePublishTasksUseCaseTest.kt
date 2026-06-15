@@ -12,9 +12,12 @@ import io.github.loshine.andpub.domain.model.PackageType
 import io.github.loshine.andpub.domain.model.PublishMode
 import io.github.loshine.andpub.domain.model.PublishTaskRecord
 import io.github.loshine.andpub.domain.model.PublishTaskStatus
+import io.github.loshine.andpub.platform.ArtifactDownloadTarget
 import io.kotest.core.spec.style.StringSpec
 import io.kotest.matchers.collections.shouldContain
 import io.kotest.matchers.shouldBe
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.withTimeout
 
 class CreatePublishTasksUseCaseTest : StringSpec({
     val app = AppRecord("app-1", "猫耳", "cn.missevan")
@@ -56,9 +59,11 @@ class CreatePublishTasksUseCaseTest : StringSpec({
 
     "downloads url artifact for markets without direct url upload" {
         var downloadedUrl: String? = null
+        var downloadTarget: ArtifactDownloadTarget? = null
         val useCase = CreatePublishTasksUseCase(
-            downloadUrlArtifact = {
-                downloadedUrl = it
+            downloadUrlArtifact = { url, target ->
+                downloadedUrl = url
+                downloadTarget = target
                 Result.success("/tmp/downloaded.apk")
             },
             inspectArtifact = { path, _, _ ->
@@ -78,6 +83,9 @@ class CreatePublishTasksUseCaseTest : StringSpec({
         val task = useCase(snapshot, app, listOf(channel)).single()
 
         downloadedUrl shouldBe "https://cdn.example.com/app.apk"
+        downloadTarget?.marketFolder shouldBe "xiaomi"
+        downloadTarget?.artifactFolder shouldBe "apk"
+        downloadTarget?.variantFolder shouldBe "universal"
         task.status shouldBe PublishTaskStatus.Ready
         task.artifact.sourceType shouldBe ArtifactSourceType.LocalFile
         task.artifact.value shouldBe "/tmp/downloaded.apk"
@@ -91,7 +99,7 @@ class CreatePublishTasksUseCaseTest : StringSpec({
     "downloads and inspects url artifact for markets with direct url upload" {
         var downloadCalled = false
         val useCase = CreatePublishTasksUseCase(
-            downloadUrlArtifact = {
+            downloadUrlArtifact = { _, _ ->
                 downloadCalled = true
                 Result.success("/tmp/downloaded.apk")
             },
@@ -120,9 +128,84 @@ class CreatePublishTasksUseCaseTest : StringSpec({
         task.logs.map { it.message } shouldContain "华为 AppGallery 支持 URL 拉包，将直接提交 URL"
     }
 
+    "downloads bundle url artifacts into bundle cache target" {
+        var downloadTarget: ArtifactDownloadTarget? = null
+        val useCase = CreatePublishTasksUseCase(
+            downloadUrlArtifact = { _, target ->
+                downloadTarget = target
+                Result.success("/tmp/downloaded.aab")
+            },
+            inspectArtifact = { path, _, _ -> Result.success(testInspection(path)) },
+        )
+        val channel = channel(MarketType.Huawei)
+        val snapshot = LocalStateSnapshot(
+            apps = listOf(app),
+            channels = listOf(channel),
+            unifiedArtifact = ArtifactDraft(
+                sourceType = ArtifactSourceType.Url,
+                packageType = PackageType.Aab,
+                value = "https://cdn.example.com/app.aab",
+            ),
+        )
+
+        val task = useCase(snapshot, app, listOf(channel)).single()
+
+        task.status shouldBe PublishTaskStatus.Ready
+        downloadTarget?.marketFolder shouldBe "huawei"
+        downloadTarget?.artifactFolder shouldBe "bundle"
+        downloadTarget?.variantFolder shouldBe null
+    }
+
+    "downloads url artifacts for selected channels concurrently" {
+        val secondDownloadStarted = CompletableDeferred<Unit>()
+        val downloadedUrls = mutableListOf<String>()
+        val xiaomi = channel(MarketType.Xiaomi)
+        val tencent = channel(MarketType.Tencent)
+        val useCase = CreatePublishTasksUseCase(
+            downloadUrlArtifact = { url, _ ->
+                downloadedUrls += url
+                if (url.endsWith("app-1.apk")) {
+                    secondDownloadStarted.await()
+                } else {
+                    secondDownloadStarted.complete(Unit)
+                }
+                Result.success("/tmp/${url.substringAfterLast("/")}")
+            },
+            inspectArtifact = { path, _, _ ->
+                Result.success(testInspection(path))
+            },
+        )
+        val snapshot = LocalStateSnapshot(
+            apps = listOf(app),
+            channels = listOf(xiaomi, tencent),
+            publishMode = PublishMode.PerChannelArtifact,
+            channelArtifacts = mapOf(
+                xiaomi.id to ArtifactDraft(
+                    sourceType = ArtifactSourceType.Url,
+                    value = "https://cdn.example.com/app-1.apk",
+                ),
+                tencent.id to ArtifactDraft(
+                    sourceType = ArtifactSourceType.Url,
+                    value = "https://cdn.example.com/app-2.apk",
+                ),
+            ),
+        )
+
+        val tasks = withTimeout(1_000) {
+            useCase(snapshot, app, listOf(xiaomi, tencent))
+        }
+
+        downloadedUrls shouldBe listOf(
+            "https://cdn.example.com/app-1.apk",
+            "https://cdn.example.com/app-2.apk",
+        )
+        tasks.map { it.id } shouldBe listOf("task-2", "task-3")
+        tasks.map { it.channelId } shouldBe listOf(xiaomi.id, tencent.id)
+    }
+
     "fails task when fallback download fails" {
         val useCase = CreatePublishTasksUseCase(
-            downloadUrlArtifact = { Result.failure(IllegalStateException("network down")) },
+            downloadUrlArtifact = { _, _ -> Result.failure(IllegalStateException("network down")) },
             inspectArtifact = { path, _, _ -> Result.success(testInspection(path)) },
         )
         val channel = channel(MarketType.Tencent)
@@ -145,10 +228,12 @@ class CreatePublishTasksUseCaseTest : StringSpec({
 
     "downloads split url artifacts for markets without direct url upload" {
         val downloadedUrls = mutableListOf<String>()
+        val downloadTargets = mutableListOf<ArtifactDownloadTarget>()
         val useCase = CreatePublishTasksUseCase(
-            downloadUrlArtifact = {
-                downloadedUrls += it
-                Result.success("/tmp/${it.substringAfterLast("/")}")
+            downloadUrlArtifact = { url, target ->
+                downloadedUrls += url
+                downloadTargets += target
+                Result.success("/tmp/${url.substringAfterLast("/")}")
             },
             inspectArtifact = { path, _, _ ->
                 Result.success(testInspection(path))
@@ -172,6 +257,9 @@ class CreatePublishTasksUseCaseTest : StringSpec({
             "https://cdn.example.com/app-32.apk",
             "https://cdn.example.com/app-64.apk",
         )
+        downloadTargets.map { it.marketFolder } shouldBe listOf("tencent", "tencent")
+        downloadTargets.map { it.artifactFolder } shouldBe listOf("apk", "apk")
+        downloadTargets.map { it.variantFolder } shouldBe listOf("32", "64")
         task.status shouldBe PublishTaskStatus.Ready
         task.artifact.sourceType shouldBe ArtifactSourceType.LocalFile
         task.artifact.split32.value shouldBe "/tmp/app-32.apk"
@@ -187,9 +275,9 @@ class CreatePublishTasksUseCaseTest : StringSpec({
     "downloads split url artifacts for vivo and converts to local upload files" {
         val downloadedUrls = mutableListOf<String>()
         val useCase = CreatePublishTasksUseCase(
-            downloadUrlArtifact = {
-                downloadedUrls += it
-                Result.success("/tmp/${it.substringAfterLast("/")}")
+            downloadUrlArtifact = { url, _ ->
+                downloadedUrls += url
+                Result.success("/tmp/${url.substringAfterLast("/")}")
             },
             inspectArtifact = { path, _, _ ->
                 Result.success(testInspection(path))
@@ -229,7 +317,7 @@ class CreatePublishTasksUseCaseTest : StringSpec({
 
     "fails url task when downloaded artifact has no manifest package" {
         val useCase = CreatePublishTasksUseCase(
-            downloadUrlArtifact = { Result.success("/tmp/downloaded.apk") },
+            downloadUrlArtifact = { _, _ -> Result.success("/tmp/downloaded.apk") },
             inspectArtifact = { path, _, _ ->
                 Result.success(noManifestInspection(path))
             },

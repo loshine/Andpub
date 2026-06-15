@@ -22,7 +22,10 @@ actual suspend fun inspectLocalArtifact(
 ): Result<ArtifactInspection> =
     Result.failure(UnsupportedOperationException("Android 端暂未接入文件选择与解析"))
 
-actual suspend fun downloadArtifactFromUrl(url: String): Result<String> =
+actual suspend fun downloadArtifactFromUrl(
+    url: String,
+    target: ArtifactDownloadTarget,
+): Result<String> =
     Result.failure(UnsupportedOperationException("Android 端暂未接入 URL 产物下载"))
 
 actual suspend fun readBinaryFile(path: String): Result<ByteArray> =

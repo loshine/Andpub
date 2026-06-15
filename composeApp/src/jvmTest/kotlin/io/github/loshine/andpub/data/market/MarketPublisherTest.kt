@@ -51,6 +51,7 @@ import io.github.loshine.andpub.domain.model.VivoOnlineType
 import io.github.loshine.andpub.domain.model.VivoPublishOptions
 import io.github.loshine.andpub.domain.model.withVivoEnvironment
 import io.kotest.core.spec.style.StringSpec
+import io.kotest.matchers.collections.shouldContain
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
 import io.mockk.coEvery
@@ -307,6 +308,36 @@ class MarketPublisherTest : StringSpec({
         result.status shouldBe PublishTaskStatus.Submitted
         result.vendorTaskId shouldBe "task-1"
         result.vendorUploadIds shouldBe listOf("serial-1")
+        coVerify { remote.syncUpdateApp(any(), any(), any(), VivoApiEnvironment.Sandbox) }
+    }
+
+    "vivo publisher skips sandbox app detail precheck when sandbox does not support query details" {
+        val remote = mockk<VivoRemoteDataSource>()
+        coEvery {
+            remote.queryAppDetails("access", "secret", "com.example.app", VivoApiEnvironment.Sandbox)
+        } throws IllegalStateException("vivo应用详情 code=10010: 此功能不存在，请联系vivo开放平台")
+        coEvery {
+            remote.uploadApk(
+                accessKey = "access",
+                accessSecret = "secret",
+                packageName = "com.example.app",
+                fileName = "app.apk",
+                fileBytes = any(),
+                fileMd5 = "md5",
+                environment = VivoApiEnvironment.Sandbox,
+            )
+        } returns VivoUploadResult(packageName = "com.example.app", serialNumber = "serial-1", md5 = "md5")
+        coEvery {
+            remote.syncUpdateApp(any(), any(), any(), VivoApiEnvironment.Sandbox)
+        } returns VivoOperationResult(message = "ok", taskId = "task-1")
+
+        val result = VivoMarketPublisher(remote, readFile = { Result.success("apk".encodeToByteArray()) })
+            .publish(vivoPublishRequest())
+            .getOrThrow()
+
+        result.status shouldBe PublishTaskStatus.Submitted
+        result.logs.map { it.message } shouldContain "vivo 测试环境不支持 app.query.details，已跳过应用存在性预校验"
+        coVerify { remote.uploadApk(any(), any(), any(), any(), any(), any(), any(), VivoApiEnvironment.Sandbox) }
         coVerify { remote.syncUpdateApp(any(), any(), any(), VivoApiEnvironment.Sandbox) }
     }
 

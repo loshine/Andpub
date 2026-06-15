@@ -6,6 +6,7 @@ import io.github.loshine.andpub.data.remote.signPlain
 import io.github.loshine.andpub.domain.model.VivoApiEnvironment
 import io.github.loshine.andpub.platform.hmacSha256Hex
 import io.ktor.client.HttpClient
+import io.ktor.client.plugins.timeout
 import io.ktor.client.request.forms.formData
 import io.ktor.client.request.forms.submitForm
 import io.ktor.client.request.forms.submitFormWithBinaryData
@@ -248,12 +249,20 @@ class VivoRemoteDataSource(
                     },
                 )
             },
-        ).bodyAsText()
+        ) {
+            timeout {
+                requestTimeoutMillis = VIVO_UPLOAD_REQUEST_TIMEOUT_MILLIS
+                socketTimeoutMillis = VIVO_UPLOAD_SOCKET_TIMEOUT_MILLIS
+            }
+        }.bodyAsText()
         val response = decodeResponse<VivoResponse<T>>(marketName, text)
         response.requireSuccess(marketName)
         return response
     }
 }
+
+private const val VIVO_UPLOAD_REQUEST_TIMEOUT_MILLIS = 10 * 60 * 1000L
+private const val VIVO_UPLOAD_SOCKET_TIMEOUT_MILLIS = 2 * 60 * 1000L
 
 private fun VivoResponse<VivoOperationData>.toVivoOperationResult(): VivoOperationResult =
     VivoOperationResult(

@@ -17,11 +17,16 @@ import io.github.loshine.andpub.domain.model.PublishTaskRecord
 import io.github.loshine.andpub.domain.model.PublishTaskStage
 import io.github.loshine.andpub.domain.model.PublishTaskStatus
 import io.github.loshine.andpub.domain.model.ToolSettings
+import io.github.loshine.andpub.platform.ArtifactDownloadTarget
 import io.github.loshine.andpub.platform.downloadArtifactFromUrl
 import io.github.loshine.andpub.platform.inspectLocalArtifact
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlin.time.Clock
 
 class CreatePublishTasksUseCase(
-    private val downloadUrlArtifact: suspend (String) -> Result<String> = ::downloadArtifactFromUrl,
+    private val downloadUrlArtifact: suspend (String, ArtifactDownloadTarget) -> Result<String> = ::downloadArtifactFromUrl,
     private val inspectArtifact: suspend (String, String, String) -> Result<ArtifactInspection> = ::inspectLocalArtifact,
 ) {
     fun createPendingTasks(
@@ -54,45 +59,66 @@ class CreatePublishTasksUseCase(
         snapshot: LocalStateSnapshot,
         app: AppRecord,
         channels: List<ChannelRecord>,
-    ): List<PublishTaskRecord> {
+    ): List<PublishTaskRecord> = coroutineScope {
         var nextId = snapshot.nextAvailableId()
-        return channels.map { channel ->
-            val artifact = snapshot.artifactFor(channel)
-            val prepared = runCatching {
-                prepareArtifact(channel, artifact, snapshot.toolSettings)
-            }.getOrElse {
-                PreparedArtifact(
-                    artifact = artifact,
-                    logs = listOf(
-                        PublishTaskLog(
-                            LogLevel.Error,
-                            "${channel.marketType.displayName} 发布任务创建失败：${it.message ?: "未知错误"}",
-                        )
-                    ),
+        val publishTimeFolder = currentPublishTimeFolder()
+        channels.map { channel ->
+            val taskId = "task-${nextId++}"
+            async {
+                createPublishTaskRecord(
+                    snapshot = snapshot,
+                    app = app,
+                    channel = channel,
+                    taskId = taskId,
+                    publishTimeFolder = publishTimeFolder,
                 )
             }
-            val logs = prepared.logs + validateArtifact(app.packageName, channel, prepared.artifact)
-            PublishTaskRecord(
-                id = "task-${nextId++}",
-                appId = app.id,
-                channelId = channel.id,
-                marketType = channel.marketType,
-                publishMode = snapshot.publishMode,
-                artifact = prepared.artifact,
-                status = if (logs.any { it.level == LogLevel.Error }) {
-                    PublishTaskStatus.Failed
-                } else {
-                    PublishTaskStatus.Ready
-                },
-                logs = logs,
+        }.awaitAll()
+    }
+
+    private suspend fun createPublishTaskRecord(
+        snapshot: LocalStateSnapshot,
+        app: AppRecord,
+        channel: ChannelRecord,
+        taskId: String,
+        publishTimeFolder: String,
+    ): PublishTaskRecord {
+        val artifact = snapshot.artifactFor(channel)
+        val prepared = runCatching {
+            prepareArtifact(channel, artifact, snapshot.toolSettings, publishTimeFolder)
+        }.getOrElse {
+            PreparedArtifact(
+                artifact = artifact,
+                logs = listOf(
+                    PublishTaskLog(
+                        LogLevel.Error,
+                        "${channel.marketType.displayName} 发布任务创建失败：${it.message ?: "未知错误"}",
+                    )
+                ),
             )
         }
+        val logs = prepared.logs + validateArtifact(app.packageName, channel, prepared.artifact)
+        return PublishTaskRecord(
+            id = taskId,
+            appId = app.id,
+            channelId = channel.id,
+            marketType = channel.marketType,
+            publishMode = snapshot.publishMode,
+            artifact = prepared.artifact,
+            status = if (logs.any { it.level == LogLevel.Error }) {
+                PublishTaskStatus.Failed
+            } else {
+                PublishTaskStatus.Ready
+            },
+            logs = logs,
+        )
     }
 
     private suspend fun prepareArtifact(
         channel: ChannelRecord,
         artifact: ArtifactDraft,
         toolSettings: ToolSettings,
+        publishTimeFolder: String,
     ): PreparedArtifact {
         val capability = MarketDefinitions.schemaOf(channel.marketType).capability
         if (
@@ -102,14 +128,17 @@ class CreatePublishTasksUseCase(
             return PreparedArtifact(artifact)
         }
         if (artifact.packageType == PackageType.SplitApk) {
-            return prepareSplitUrlArtifact(channel, artifact, capability, toolSettings)
+            return prepareSplitUrlArtifact(channel, artifact, capability, toolSettings, publishTimeFolder)
         }
         if (!artifact.value.isHttpUrl()) {
             return PreparedArtifact(artifact)
         }
 
         val originalUrl = artifact.value
-        val downloadResult = downloadUrlArtifact(originalUrl)
+        val downloadResult = downloadUrlArtifact(
+            originalUrl,
+            artifact.downloadTarget(channel, publishTimeFolder),
+        )
         val localPath = downloadResult.getOrElse {
             return PreparedArtifact(
                 artifact = artifact,
@@ -180,6 +209,7 @@ class CreatePublishTasksUseCase(
         artifact: ArtifactDraft,
         capability: MarketCapability,
         toolSettings: ToolSettings,
+        publishTimeFolder: String,
     ): PreparedArtifact {
         if (!artifact.split32.value.isHttpUrl() || !artifact.split64.value.isHttpUrl()) {
             return PreparedArtifact(artifact)
@@ -191,6 +221,8 @@ class CreatePublishTasksUseCase(
             part = artifact.split32,
             uploadByUrl = capability.supportsUserUrl,
             toolSettings = toolSettings,
+            publishTimeFolder = publishTimeFolder,
+            variantFolder = "32",
         )
         val downloaded64 = downloadSplitPart(
             channel = channel,
@@ -198,6 +230,8 @@ class CreatePublishTasksUseCase(
             part = artifact.split64,
             uploadByUrl = capability.supportsUserUrl,
             toolSettings = toolSettings,
+            publishTimeFolder = publishTimeFolder,
+            variantFolder = "64",
         )
         val logs = downloaded32.logs + downloaded64.logs
         if (logs.any { it.level == LogLevel.Error }) {
@@ -219,13 +253,18 @@ class CreatePublishTasksUseCase(
         part: ArtifactPart,
         uploadByUrl: Boolean,
         toolSettings: ToolSettings,
+        publishTimeFolder: String,
+        variantFolder: String,
     ): PreparedSplitPart {
         if (!part.value.isHttpUrl()) {
             return PreparedSplitPart(part)
         }
 
         val originalUrl = part.value
-        val localPath = downloadUrlArtifact(originalUrl).getOrElse {
+        val localPath = downloadUrlArtifact(
+            originalUrl,
+            splitDownloadTarget(channel, publishTimeFolder, variantFolder),
+        ).getOrElse {
             return PreparedSplitPart(
                 part = part,
                 logs = listOf(
@@ -513,6 +552,41 @@ class CreatePublishTasksUseCase(
         return ids.maxOfOrNull { id ->
             id.substringAfterLast("-").toIntOrNull() ?: 0
         }?.plus(1) ?: 1
+    }
+
+    private fun ArtifactDraft.downloadTarget(
+        channel: ChannelRecord,
+        publishTimeFolder: String,
+    ): ArtifactDownloadTarget =
+        ArtifactDownloadTarget(
+            marketFolder = channel.marketType.name.lowercase(),
+            publishTimeFolder = publishTimeFolder,
+            artifactFolder = when (packageType) {
+                PackageType.Aab -> "bundle"
+                PackageType.Apk -> "apk"
+                PackageType.SplitApk -> "apk"
+            },
+            variantFolder = when (packageType) {
+                PackageType.Apk -> "universal"
+                PackageType.Aab -> null
+                PackageType.SplitApk -> null
+            },
+        )
+
+    private fun splitDownloadTarget(
+        channel: ChannelRecord,
+        publishTimeFolder: String,
+        variantFolder: String,
+    ): ArtifactDownloadTarget =
+        ArtifactDownloadTarget(
+            marketFolder = channel.marketType.name.lowercase(),
+            publishTimeFolder = publishTimeFolder,
+            artifactFolder = "apk",
+            variantFolder = variantFolder,
+        )
+
+    private fun currentPublishTimeFolder(): String {
+        return Clock.System.now().toEpochMilliseconds().toString()
     }
 
     private data class PreparedArtifact(

@@ -72,13 +72,12 @@ class VivoMarketPublisher(
                     stage = PublishTaskStage.Validation,
                 )
             )
-            proveAppExists(
+            logs += proveAppExists(
                 accessKey = accessKey,
                 accessSecret = accessSecret,
                 packageName = request.app.packageName,
                 environment = environment,
             )
-            logs += PublishTaskLog(LogLevel.Info, "已确认 vivo 应用存在", PublishTaskStage.Validation)
 
             when (request.task.artifact.packageType) {
                 PackageType.Apk -> publishUnified(
@@ -144,7 +143,7 @@ class VivoMarketPublisher(
         accessSecret: String,
         packageName: String,
         environment: VivoApiEnvironment,
-    ) {
+    ): PublishTaskLog {
         val detail = runCatching {
             remote.queryAppDetails(
                 accessKey = accessKey,
@@ -153,11 +152,19 @@ class VivoMarketPublisher(
                 environment = environment,
             )
         }.getOrElse {
+            if (environment == VivoApiEnvironment.Sandbox && it.isUnsupportedSandboxAppDetail()) {
+                return PublishTaskLog(
+                    level = LogLevel.Warning,
+                    message = "vivo 测试环境不支持 app.query.details，已跳过应用存在性预校验",
+                    stage = PublishTaskStage.Validation,
+                )
+            }
             error("无法确认 vivo 应用已存在；首次创建不支持：${it.message ?: "未知错误"}")
         }
         require(detail.packageName == null || detail.packageName == packageName) {
             "vivo 应用包名不匹配：${detail.packageName}"
         }
+        return PublishTaskLog(LogLevel.Info, "已确认 vivo 应用存在", PublishTaskStage.Validation)
     }
 
     private suspend fun publishUnified(
@@ -343,3 +350,8 @@ private fun <T> Result<T>.mapFailureWithEnvironment(channel: ChannelRecord): Res
 
 private fun String.fileName(): String =
     trim().substringAfterLast('/').substringAfterLast('\\').ifBlank { "artifact.apk" }
+
+private fun Throwable.isUnsupportedSandboxAppDetail(): Boolean {
+    val text = message.orEmpty()
+    return "code=10010" in text || "此功能不存在" in text
+}

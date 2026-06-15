@@ -700,6 +700,7 @@ private fun PublishTargetSection(
     onIntent: (AndpubIntent) -> Unit,
 ) {
     val targetIds = state.publishTargetChannels.map { it.id }.toSet()
+    val expandedVivoOptions = remember(state.selectedAppId) { mutableStateMapOf<String, Boolean>() }
 
     OutlinedCard(modifier = Modifier.fillMaxWidth()) {
         Column(
@@ -712,33 +713,53 @@ private fun PublishTargetSection(
                 return@Column
             }
             state.selectedChannels.forEach { channel ->
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Checkbox(
-                        checked = channel.id in targetIds,
-                        onCheckedChange = {
-                            onIntent(AndpubIntent.TogglePublishChannel(channel.id, it))
-                        },
-                    )
-                    Column(
-                        modifier = Modifier.weight(1f),
-                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                val selected = channel.id in targetIds
+                val showVivoOptions = selected && channel.marketType == MarketType.Vivo
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Text(channel.displayTitle(), style = MaterialTheme.typography.bodyLarge)
-                        val details = if (channel.marketType == MarketType.Vivo) {
-                            "${channel.marketType.displayName} / ${channel.vivoEnvironment().displayName}"
-                        } else {
-                            channel.marketType.displayName
+                        Checkbox(
+                            checked = selected,
+                            onCheckedChange = {
+                                if (!it) {
+                                    expandedVivoOptions.remove(channel.id)
+                                }
+                                onIntent(AndpubIntent.TogglePublishChannel(channel.id, it))
+                            },
+                        )
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                        ) {
+                            Text(channel.displayTitle(), style = MaterialTheme.typography.bodyLarge)
+                            val details = if (channel.marketType == MarketType.Vivo) {
+                                "${channel.marketType.displayName} / ${channel.vivoEnvironment().displayName}"
+                            } else {
+                                channel.marketType.displayName
+                            }
+                            Text(details, style = MaterialTheme.typography.bodySmall)
                         }
-                        Text(details, style = MaterialTheme.typography.bodySmall)
+                        if (showVivoOptions) {
+                            TextButton(
+                                onClick = {
+                                    expandedVivoOptions[channel.id] = expandedVivoOptions[channel.id] != true
+                                },
+                            ) {
+                                Text(if (expandedVivoOptions[channel.id] == true) "收起选项" else "发布选项")
+                            }
+                        }
+                    }
+                    if (showVivoOptions && expandedVivoOptions[channel.id] == true) {
+                        VivoPublishOptionSection(
+                            state = state,
+                            channel = channel,
+                            onIntent = onIntent,
+                        )
                     }
                 }
-            }
-            if (state.publishTargetChannels.any { it.marketType == MarketType.Vivo }) {
-                VivoPublishOptionSection(state, onIntent)
             }
             if (targetIds.isEmpty()) {
                 Text("勾选渠道后才会显示该渠道的发布配置。", style = MaterialTheme.typography.bodySmall)
@@ -750,14 +771,36 @@ private fun PublishTargetSection(
 @Composable
 private fun VivoPublishOptionSection(
     state: AndpubUiState,
+    channel: ChannelRecord,
     onIntent: (AndpubIntent) -> Unit,
 ) {
     val options = state.snapshot.vivoPublishOptions
-    val hasProductionVivo = state.publishTargetChannels.any {
-        it.marketType == MarketType.Vivo && it.vivoEnvironment() == VivoApiEnvironment.Production
-    }
+    val isProduction = channel.vivoEnvironment() == VivoApiEnvironment.Production
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("vivo 发布选项", style = MaterialTheme.typography.titleSmall)
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            VivoApiEnvironment.entries.forEach { item ->
+                StableFilterChip(
+                    selected = channel.vivoEnvironment() == item,
+                    onClick = {
+                        onIntent(
+                            AndpubIntent.AddOrUpdateChannel(
+                                channelId = channel.id,
+                                name = channel.name,
+                                marketType = channel.marketType,
+                                marketAppId = channel.marketAppId,
+                                credentials = channel.credentials,
+                                extraFields = channel.extraFields.withVivoEnvironment(item),
+                            )
+                        )
+                    },
+                    label = { Text(item.displayName) },
+                )
+            }
+        }
         Text(
             text = "vivo 会先确认目标环境中的应用已存在，再上传文件并提交更新。",
             style = MaterialTheme.typography.bodySmall,
@@ -791,7 +834,7 @@ private fun VivoPublishOptionSection(
                 )
             }
         }
-        if (hasProductionVivo) {
+        if (isProduction) {
             Row(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
