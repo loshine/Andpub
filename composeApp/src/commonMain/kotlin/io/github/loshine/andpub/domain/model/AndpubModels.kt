@@ -20,6 +20,31 @@ enum class HuaweiAuthMode(val displayName: String) {
 }
 
 @Serializable
+enum class VivoApiEnvironment(
+    val displayName: String,
+    val endpoint: String,
+    val extraFieldValue: String,
+) {
+    Production(
+        displayName = "正式环境",
+        endpoint = "https://developer-api.vivo.com.cn/router/rest",
+        extraFieldValue = "production",
+    ),
+    Sandbox(
+        displayName = "测试环境",
+        endpoint = "https://sandbox-developer-api.vivo.com.cn/router/rest",
+        extraFieldValue = "sandbox",
+    );
+
+    companion object {
+        const val ExtraFieldKey = "vivoEnvironment"
+
+        fun fromExtraFields(extraFields: Map<String, String>): VivoApiEnvironment =
+            entries.firstOrNull { it.extraFieldValue == extraFields[ExtraFieldKey] } ?: Production
+    }
+}
+
+@Serializable
 enum class PublishMode(val displayName: String) {
     UnifiedArtifact("统一产物"),
     PerChannelArtifact("按渠道产物"),
@@ -49,7 +74,38 @@ enum class PublishTaskStatus(val displayName: String) {
     Created("已创建"),
     Validating("校验中"),
     Ready("待提交"),
+    Uploading("上传中"),
+    Submitted("已提交"),
+    Accepted("已受理"),
     Failed("失败"),
+}
+
+@Serializable
+enum class PublishTaskStage(val displayName: String) {
+    Download("下载"),
+    Validation("校验"),
+    Upload("上传"),
+    Submit("提交"),
+    Result("结果"),
+}
+
+@Serializable
+enum class VivoOnlineType(
+    val code: String,
+    val displayName: String,
+) {
+    Realtime("1", "实时上架"),
+    Scheduled("2", "定时上架"),
+}
+
+@Serializable
+enum class VivoCompatibleDevice(
+    val code: String,
+    val displayName: String,
+) {
+    Phone("1", "手机"),
+    PhoneAndTablet("2", "手机和平板"),
+    Tablet("3", "平板"),
 }
 
 @Serializable
@@ -114,6 +170,12 @@ data class ChannelRecord(
     val syncStatus: ChannelSyncStatus = ChannelSyncStatus.NotSynced,
     val lastError: String? = null,
 )
+
+fun ChannelRecord.vivoEnvironment(): VivoApiEnvironment =
+    VivoApiEnvironment.fromExtraFields(extraFields)
+
+fun Map<String, String>.withVivoEnvironment(environment: VivoApiEnvironment): Map<String, String> =
+    this + (VivoApiEnvironment.ExtraFieldKey to environment.extraFieldValue)
 
 @Serializable
 data class AppSettingsExport(
@@ -205,12 +267,31 @@ data class PublishTaskRecord(
     val artifact: ArtifactDraft,
     val status: PublishTaskStatus,
     val logs: List<PublishTaskLog>,
+    val vendorTaskId: String? = null,
+    val vendorUploadIds: List<String> = emptyList(),
+    val publishEnvironment: String? = null,
 )
 
 @Serializable
 data class PublishTaskLog(
     val level: LogLevel,
     val message: String,
+    val stage: PublishTaskStage? = null,
+)
+
+data class MarketPublishRequest(
+    val app: AppRecord,
+    val channel: ChannelRecord,
+    val task: PublishTaskRecord,
+    val vivoOptions: VivoPublishOptions = VivoPublishOptions(),
+)
+
+data class MarketPublishResult(
+    val status: PublishTaskStatus,
+    val logs: List<PublishTaskLog>,
+    val vendorTaskId: String? = null,
+    val vendorUploadIds: List<String> = emptyList(),
+    val environment: String? = null,
 )
 
 @Serializable
@@ -245,4 +326,12 @@ data class LocalStateSnapshot(
     val selectedAppId: String? = null,
     val publishMode: PublishMode = PublishMode.UnifiedArtifact,
     val publishChannelIds: List<String> = emptyList(),
+    val vivoPublishOptions: VivoPublishOptions = VivoPublishOptions(),
+)
+
+@Serializable
+data class VivoPublishOptions(
+    val onlineType: VivoOnlineType? = null,
+    val compatibleDevice: VivoCompatibleDevice? = null,
+    val productionConfirmed: Boolean = false,
 )

@@ -15,6 +15,42 @@ data class VivoOperationResult(
     val taskId: String?,
 )
 
+data class VivoUnifiedUpdateRequest(
+    val packageName: String,
+    val versionCode: Long,
+    val apk: String,
+    val fileMd5: String,
+    val onlineType: String,
+    val compatibleDevice: String,
+) {
+    fun toParams(): Map<String, String> =
+        mapOf(
+            "packageName" to packageName,
+            "versionCode" to versionCode.toString(),
+            "apk" to apk,
+            "fileMd5" to fileMd5,
+            "onlineType" to onlineType,
+            "compatibleDevice" to compatibleDevice,
+        )
+}
+
+data class VivoSplitUpdateRequest(
+    val packageName: String,
+    val apk32: String,
+    val apk64: String,
+    val onlineType: String,
+    val compatibleDevice: String,
+) {
+    fun toParams(): Map<String, String> =
+        mapOf(
+            "packageName" to packageName,
+            "apk32" to apk32,
+            "apk64" to apk64,
+            "onlineType" to onlineType,
+            "compatibleDevice" to compatibleDevice,
+        )
+}
+
 @Serializable
 data class VivoTaskStatus(
     val packageName: String? = null,

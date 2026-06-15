@@ -11,18 +11,25 @@ import io.github.loshine.andpub.domain.model.ArtifactSourceType
 import io.github.loshine.andpub.domain.model.ChannelRecord
 import io.github.loshine.andpub.domain.model.ChannelSyncStatus
 import io.github.loshine.andpub.domain.model.LocalStateSnapshot
+import io.github.loshine.andpub.domain.model.LogLevel
 import io.github.loshine.andpub.domain.model.MarketAppInfo
 import io.github.loshine.andpub.domain.model.MarketType
 import io.github.loshine.andpub.domain.model.PackageType
 import io.github.loshine.andpub.domain.model.PublishMode
+import io.github.loshine.andpub.domain.model.PublishTaskLog
 import io.github.loshine.andpub.domain.model.PublishTaskRecord
+import io.github.loshine.andpub.domain.model.PublishTaskStage
+import io.github.loshine.andpub.domain.model.PublishTaskStatus
 import io.github.loshine.andpub.domain.model.SplitApkSlot
 import io.github.loshine.andpub.domain.model.ToolSettings
+import io.github.loshine.andpub.domain.model.VivoPublishOptions
 import io.github.loshine.andpub.domain.repository.AndpubRepository
 import io.github.loshine.andpub.domain.usecase.BuildAppSettingsExportUseCase
 import io.github.loshine.andpub.domain.usecase.CreatePublishTasksUseCase
+import io.github.loshine.andpub.domain.usecase.ExecutePublishTasksUseCase
 import io.github.loshine.andpub.domain.usecase.FetchMarketAppInfoUseCase
 import io.github.loshine.andpub.domain.usecase.ObserveAndpubStateUseCase
+import io.github.loshine.andpub.domain.usecase.RefreshPublishTaskStatusUseCase
 import io.github.loshine.andpub.domain.usecase.UpdateAndpubStateUseCase
 import io.github.loshine.andpub.domain.usecase.ValidateChannelCredentialsUseCase
 import io.github.loshine.andpub.domain.usecase.ValidatePackageNameUseCase
@@ -45,6 +52,7 @@ data class AndpubUiState(
     val snapshot: LocalStateSnapshot = LocalStateSnapshot(),
     val message: String? = null,
     val isCreatingPublishTasks: Boolean = false,
+    val vivoProductionConfirmed: Boolean = false,
     val channelTests: Map<String, ChannelTestUiState> = emptyMap(),
 ) {
     val apps: List<AppRecord> = snapshot.apps
@@ -80,6 +88,8 @@ sealed interface AndpubIntent {
     data class SelectApp(val appId: String) : AndpubIntent
     data object ExportSelectedAppSettings : AndpubIntent
     data class UpdatePublishMode(val mode: PublishMode) : AndpubIntent
+    data class UpdateVivoPublishOptions(val options: VivoPublishOptions) : AndpubIntent
+    data class UpdateVivoProductionConfirmed(val confirmed: Boolean) : AndpubIntent
     data class UpdateToolSettings(val settings: ToolSettings) : AndpubIntent
     data class AddOrUpdateChannel(
         val channelId: String?,
@@ -146,35 +156,41 @@ sealed interface AndpubIntent {
         val error: Throwable,
     ) : AndpubIntent
 
-    data object CreateMockPublishTasks : AndpubIntent
+    data object CreatePublishTasks : AndpubIntent
+    data class RefreshPublishTaskStatus(val taskId: String) : AndpubIntent
 }
 
 @KoinViewModel
 class AndpubViewModel(
     repository: AndpubRepository,
     private val fetchMarketAppInfo: FetchMarketAppInfoUseCase,
+    private val executePublishTasks: ExecutePublishTasksUseCase,
+    private val refreshPublishTaskStatus: RefreshPublishTaskStatusUseCase,
     private val weComWebhookRemote: WeComWebhookRemoteDataSource,
     private val validatePackageName: ValidatePackageNameUseCase = ValidatePackageNameUseCase(),
     private val validateChannelCredentials: ValidateChannelCredentialsUseCase = ValidateChannelCredentialsUseCase(),
-    private val createPublishTasks: CreatePublishTasksUseCase = CreatePublishTasksUseCase(),
+    private val createPublishTaskRecords: CreatePublishTasksUseCase = CreatePublishTasksUseCase(),
     private val buildAppSettingsExport: BuildAppSettingsExportUseCase = BuildAppSettingsExportUseCase(),
 ) : ViewModel() {
     private val observeState = ObserveAndpubStateUseCase(repository)
     private val updateState = UpdateAndpubStateUseCase(repository)
     private val message = MutableStateFlow<String?>(null)
     private val isCreatingPublishTasks = MutableStateFlow(false)
+    private val vivoProductionConfirmed = MutableStateFlow(false)
     private val channelTests = MutableStateFlow<Map<String, ChannelTestUiState>>(emptyMap())
 
     val uiState: StateFlow<AndpubUiState> = combine(
         observeState(),
         message,
         isCreatingPublishTasks,
+        vivoProductionConfirmed,
         channelTests,
-    ) { snapshot, currentMessage, creatingTasks, tests ->
+    ) { snapshot, currentMessage, creatingTasks, productionConfirmed, tests ->
         AndpubUiState(
-            snapshot = snapshot.ensureSelectedApp(),
+            snapshot = snapshot.ensureSelectedApp().withoutPersistedVivoProductionConfirmation(),
             message = currentMessage,
             isCreatingPublishTasks = creatingTasks,
+            vivoProductionConfirmed = productionConfirmed,
             channelTests = tests,
         )
     }.stateIn(
@@ -188,113 +204,166 @@ class AndpubViewModel(
             is AndpubIntent.CreateApp -> createApp(intent.name, intent.packageName)
             is AndpubIntent.UpdateApp -> updateApp(intent.appId, intent.name, intent.packageName)
             is AndpubIntent.DeleteApp -> deleteApp(intent.appId)
-            is AndpubIntent.SelectApp -> reduce { it.copy(selectedAppId = intent.appId) }
+            is AndpubIntent.SelectApp -> {
+                clearVivoProductionConfirmation()
+                reduce { it.copy(selectedAppId = intent.appId) }
+            }
             AndpubIntent.ExportSelectedAppSettings -> exportSelectedAppSettings()
-            is AndpubIntent.UpdatePublishMode -> reduce { it.copy(publishMode = intent.mode) }
+            is AndpubIntent.UpdatePublishMode -> {
+                clearVivoProductionConfirmation()
+                reduce { it.copy(publishMode = intent.mode) }
+            }
+            is AndpubIntent.UpdateVivoPublishOptions -> {
+                clearVivoProductionConfirmation()
+                reduce {
+                    it.copy(vivoPublishOptions = intent.options.withoutProductionConfirmation())
+                }
+            }
+            is AndpubIntent.UpdateVivoProductionConfirmed -> {
+                vivoProductionConfirmed.value = intent.confirmed
+            }
             is AndpubIntent.UpdateToolSettings -> updateToolSettings(intent.settings)
-            is AndpubIntent.AddOrUpdateChannel -> addOrUpdateChannel(intent)
+            is AndpubIntent.AddOrUpdateChannel -> {
+                clearVivoProductionConfirmation()
+                addOrUpdateChannel(intent)
+            }
             is AndpubIntent.TestChannelConfig -> testChannelConfig(intent)
             is AndpubIntent.SyncChannel -> syncChannel(intent.channel)
             is AndpubIntent.SyncAllChannels -> syncAllChannels(intent.notify)
-            is AndpubIntent.DeleteChannel -> deleteChannel(intent.channelId)
-            is AndpubIntent.TogglePublishChannel -> togglePublishChannel(intent.channelId, intent.selected)
-            is AndpubIntent.UpdateUnifiedArtifact -> reduce {
-                it.copy(unifiedArtifact = intent.draft)
+            is AndpubIntent.DeleteChannel -> {
+                clearVivoProductionConfirmation()
+                deleteChannel(intent.channelId)
+            }
+            is AndpubIntent.TogglePublishChannel -> {
+                clearVivoProductionConfirmation()
+                togglePublishChannel(intent.channelId, intent.selected)
+            }
+            is AndpubIntent.UpdateUnifiedArtifact -> {
+                clearVivoProductionConfirmation()
+                reduce { it.copy(unifiedArtifact = intent.draft) }
             }
 
-            is AndpubIntent.UpdateChannelArtifact -> reduce {
-                it.copy(channelArtifacts = it.channelArtifacts + (intent.channelId to intent.draft))
+            is AndpubIntent.UpdateChannelArtifact -> {
+                clearVivoProductionConfirmation()
+                reduce {
+                    it.copy(channelArtifacts = it.channelArtifacts + (intent.channelId to intent.draft))
+                }
             }
 
-            is AndpubIntent.ApplyInspectionToUnified -> reduce {
-                it.copy(
-                    unifiedArtifact = it.unifiedArtifact.withInspection(
-                        intent.path,
-                        intent.inspection
+            is AndpubIntent.ApplyInspectionToUnified -> {
+                clearVivoProductionConfirmation()
+                reduce {
+                    it.copy(
+                        unifiedArtifact = it.unifiedArtifact.withInspection(
+                            intent.path,
+                            intent.inspection
+                        )
                     )
-                )
+                }
             }
 
-            is AndpubIntent.ApplySplitInspectionToUnified -> reduce {
-                it.copy(
-                    unifiedArtifact = it.unifiedArtifact.withSplitInspection(
-                        intent.slot,
-                        intent.path,
-                        intent.inspection,
+            is AndpubIntent.ApplySplitInspectionToUnified -> {
+                clearVivoProductionConfirmation()
+                reduce {
+                    it.copy(
+                        unifiedArtifact = it.unifiedArtifact.withSplitInspection(
+                            intent.slot,
+                            intent.path,
+                            intent.inspection,
+                        )
                     )
-                )
+                }
             }
 
-            is AndpubIntent.ApplyInspectionToChannel -> reduce {
-                val current = it.channelArtifacts[intent.channelId] ?: ArtifactDraft()
-                it.copy(
-                    channelArtifacts = it.channelArtifacts + (
+            is AndpubIntent.ApplyInspectionToChannel -> {
+                clearVivoProductionConfirmation()
+                reduce {
+                    val current = it.channelArtifacts[intent.channelId] ?: ArtifactDraft()
+                    it.copy(
+                        channelArtifacts = it.channelArtifacts + (
                             intent.channelId to current.withInspection(
                                 intent.path,
                                 intent.inspection
                             )
-                            )
-                )
+                        )
+                    )
+                }
             }
 
-            is AndpubIntent.ApplySplitInspectionToChannel -> reduce {
-                val current = it.channelArtifacts[intent.channelId] ?: ArtifactDraft()
-                it.copy(
-                    channelArtifacts = it.channelArtifacts + (
+            is AndpubIntent.ApplySplitInspectionToChannel -> {
+                clearVivoProductionConfirmation()
+                reduce {
+                    val current = it.channelArtifacts[intent.channelId] ?: ArtifactDraft()
+                    it.copy(
+                        channelArtifacts = it.channelArtifacts + (
                             intent.channelId to current.withSplitInspection(
                                 intent.slot,
                                 intent.path,
                                 intent.inspection
                             )
-                            )
-                )
-            }
-
-            is AndpubIntent.ApplyArtifactErrorToUnified -> reduce {
-                it.copy(
-                    unifiedArtifact = it.unifiedArtifact.copy(
-                        value = intent.path,
-                        message = intent.error.message ?: "产物解析失败",
+                        )
                     )
-                )
+                }
             }
 
-            is AndpubIntent.ApplySplitArtifactErrorToUnified -> reduce {
-                it.copy(
-                    unifiedArtifact = it.unifiedArtifact.withSplitError(
-                        intent.slot,
-                        intent.path,
-                        intent.error
+            is AndpubIntent.ApplyArtifactErrorToUnified -> {
+                clearVivoProductionConfirmation()
+                reduce {
+                    it.copy(
+                        unifiedArtifact = it.unifiedArtifact.copy(
+                            value = intent.path,
+                            message = intent.error.message ?: "产物解析失败",
+                        )
                     )
-                )
+                }
             }
 
-            is AndpubIntent.ApplyArtifactErrorToChannel -> reduce {
-                val current = it.channelArtifacts[intent.channelId] ?: ArtifactDraft()
-                it.copy(
-                    channelArtifacts = it.channelArtifacts + (
+            is AndpubIntent.ApplySplitArtifactErrorToUnified -> {
+                clearVivoProductionConfirmation()
+                reduce {
+                    it.copy(
+                        unifiedArtifact = it.unifiedArtifact.withSplitError(
+                            intent.slot,
+                            intent.path,
+                            intent.error
+                        )
+                    )
+                }
+            }
+
+            is AndpubIntent.ApplyArtifactErrorToChannel -> {
+                clearVivoProductionConfirmation()
+                reduce {
+                    val current = it.channelArtifacts[intent.channelId] ?: ArtifactDraft()
+                    it.copy(
+                        channelArtifacts = it.channelArtifacts + (
                             intent.channelId to current.copy(
                                 value = intent.path,
                                 message = intent.error.message ?: "产物解析失败",
                             )
-                            )
-                )
+                        )
+                    )
+                }
             }
 
-            is AndpubIntent.ApplySplitArtifactErrorToChannel -> reduce {
-                val current = it.channelArtifacts[intent.channelId] ?: ArtifactDraft()
-                it.copy(
-                    channelArtifacts = it.channelArtifacts + (
+            is AndpubIntent.ApplySplitArtifactErrorToChannel -> {
+                clearVivoProductionConfirmation()
+                reduce {
+                    val current = it.channelArtifacts[intent.channelId] ?: ArtifactDraft()
+                    it.copy(
+                        channelArtifacts = it.channelArtifacts + (
                             intent.channelId to current.withSplitError(
                                 intent.slot,
                                 intent.path,
                                 intent.error
                             )
-                            )
-                )
+                        )
+                    )
+                }
             }
 
-            AndpubIntent.CreateMockPublishTasks -> createMockPublishTasks()
+            AndpubIntent.CreatePublishTasks -> createPublishTasks()
+            is AndpubIntent.RefreshPublishTaskStatus -> refreshPublishStatus(intent.taskId)
         }
     }
 
@@ -625,7 +694,7 @@ class AndpubViewModel(
         return syncedChannel
     }
 
-    private fun createMockPublishTasks() {
+    private fun createPublishTasks() {
         val state = uiState.value
         val app = state.selectedApp
         if (app == null) {
@@ -639,24 +708,102 @@ class AndpubViewModel(
 
         viewModelScope.launch {
             isCreatingPublishTasks.value = true
-            message.value = "正在创建发布任务..."
+            message.value = "正在创建并执行发布任务..."
+            val vivoOptions = state.snapshot.vivoPublishOptions.copy(
+                productionConfirmed = state.vivoProductionConfirmed,
+            )
+            var pendingTasks = emptyList<PublishTaskRecord>()
             try {
                 runCatching {
-                    val tasks = createPublishTasks(state.snapshot, app, state.publishTargetChannels)
-                    updateState {
-                        it.copy(
-                            publishTasks = it.publishTasks.filterNot { task -> task.appId == app.id } + tasks
+                    pendingTasks = createPublishTaskRecords.createPendingTasks(
+                        snapshot = state.snapshot,
+                        app = app,
+                        channels = state.publishTargetChannels,
+                    )
+                    replacePublishTasksForApp(app.id, pendingTasks)
+
+                    val tasks = createPublishTaskRecords(state.snapshot, app, state.publishTargetChannels)
+                    replacePublishTasksForApp(app.id, tasks)
+                    tasks.map { task ->
+                        val channel = state.publishTargetChannels.firstOrNull { it.id == task.channelId }
+                        if (channel == null) {
+                            task.copy(
+                                status = PublishTaskStatus.Failed,
+                                logs = task.logs + PublishTaskLog(
+                                    level = LogLevel.Error,
+                                    message = "渠道不存在",
+                                    stage = PublishTaskStage.Result,
+                                ),
+                            ).also { updatePublishTask(it) }
+                        } else {
+                            val runningTask = task.asRunningPublishTask()
+                            if (runningTask !== task) {
+                                updatePublishTask(runningTask)
+                            }
+                            executePublishTasks(
+                                app = app,
+                                channel = channel,
+                                task = runningTask,
+                                vivoOptions = vivoOptions,
+                            ).also { updatePublishTask(it) }
+                        }
+                    }
+                }.onSuccess {
+                    message.value = "已创建并执行 ${it.size} 个发布任务"
+                }.onFailure {
+                    val errorMessage = it.message ?: "未知错误"
+                    if (pendingTasks.isNotEmpty()) {
+                        replacePublishTasksForApp(
+                            app.id,
+                            pendingTasks.map { task ->
+                                task.copy(
+                                    status = PublishTaskStatus.Failed,
+                                    logs = task.logs + PublishTaskLog(
+                                        level = LogLevel.Error,
+                                        message = "创建发布任务失败：$errorMessage",
+                                        stage = PublishTaskStage.Result,
+                                    ),
+                                )
+                            },
                         )
                     }
-                    tasks
-                }.onSuccess {
-                    message.value = "已创建 ${it.size} 个发布任务"
-                }.onFailure {
                     message.value = "创建发布任务失败：${it.message ?: "未知错误"}"
                 }
             } finally {
+                vivoProductionConfirmed.value = false
                 isCreatingPublishTasks.value = false
             }
+        }
+    }
+
+    private fun refreshPublishStatus(taskId: String) {
+        val state = uiState.value
+        val task = state.publishTasks.firstOrNull { it.id == taskId }
+        val app = state.apps.firstOrNull { it.id == task?.appId }
+        val channel = state.channels.firstOrNull { it.id == task?.channelId }
+        if (task == null || app == null || channel == null) {
+            message.value = "发布任务不存在"
+            return
+        }
+
+        viewModelScope.launch {
+            message.value = "正在刷新发布状态..."
+            val updated = refreshPublishTaskStatus(
+                app = app,
+                channel = channel,
+                task = task,
+                vivoOptions = state.snapshot.vivoPublishOptions.copy(
+                    productionConfirmed = state.vivoProductionConfirmed,
+                ),
+            )
+            updateState {
+                it.copy(
+                    publishTasks = it.publishTasks.map { item ->
+                        if (item.id == taskId) updated else item
+                    }
+                )
+            }
+            message.value = "发布状态已刷新"
         }
     }
 
@@ -664,6 +811,10 @@ class AndpubViewModel(
         viewModelScope.launch {
             updateState { it.withUpdatedChannel(channel) }
         }
+    }
+
+    private fun clearVivoProductionConfirmation() {
+        vivoProductionConfirmed.value = false
     }
 
     private fun reduce(
@@ -675,6 +826,41 @@ class AndpubViewModel(
                 .onSuccess { message.value = nextMessage }
                 .onFailure { message.value = "保存本地状态失败：${it.message ?: "未知错误"}" }
         }
+    }
+
+    private suspend fun replacePublishTasksForApp(
+        appId: String,
+        tasks: List<PublishTaskRecord>,
+    ) {
+        updateState {
+            it.copy(
+                publishTasks = it.publishTasks.filterNot { task -> task.appId == appId } + tasks
+            )
+        }
+    }
+
+    private suspend fun updatePublishTask(task: PublishTaskRecord) {
+        updateState {
+            it.copy(
+                publishTasks = it.publishTasks.map { item ->
+                    if (item.id == task.id) task else item
+                }
+            )
+        }
+    }
+
+    private fun PublishTaskRecord.asRunningPublishTask(): PublishTaskRecord {
+        if (status != PublishTaskStatus.Ready || marketType != MarketType.Vivo) {
+            return this
+        }
+        return copy(
+            status = PublishTaskStatus.Uploading,
+            logs = logs + PublishTaskLog(
+                level = LogLevel.Info,
+                message = "开始执行 vivo 发布",
+                stage = PublishTaskStage.Upload,
+            ),
+        )
     }
 
     private fun LocalStateSnapshot.withUpdatedChannel(channel: ChannelRecord): LocalStateSnapshot {
@@ -697,6 +883,12 @@ class AndpubViewModel(
                 channels.any { it.id == channelId }
             },
         )
+
+    private fun LocalStateSnapshot.withoutPersistedVivoProductionConfirmation(): LocalStateSnapshot =
+        copy(vivoPublishOptions = vivoPublishOptions.withoutProductionConfirmation())
+
+    private fun VivoPublishOptions.withoutProductionConfirmation(): VivoPublishOptions =
+        copy(productionConfirmed = false)
 
     private fun LocalStateSnapshot.newId(prefix: String): String =
         "$prefix-${nextAvailableId()}"

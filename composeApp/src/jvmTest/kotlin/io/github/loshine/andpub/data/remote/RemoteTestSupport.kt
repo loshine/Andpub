@@ -9,8 +9,11 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.headersOf
 import io.ktor.http.content.OutgoingContent
 import io.ktor.http.content.TextContent
+import io.ktor.utils.io.ByteChannel
 import io.ktor.utils.io.core.readText
 import io.ktor.utils.io.readRemaining
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 
 internal class CapturingHttpClient(
     private val responder: suspend (HttpRequestData) -> String,
@@ -33,5 +36,13 @@ internal suspend fun HttpRequestData.bodyText(): String =
         is OutgoingContent.ByteArrayContent -> content.bytes().decodeToString()
         is TextContent -> content.text
         is OutgoingContent.ReadChannelContent -> content.readFrom().readRemaining().readText()
+        is OutgoingContent.WriteChannelContent -> coroutineScope {
+            val channel = ByteChannel()
+            launch {
+                content.writeTo(channel)
+                channel.close()
+            }
+            channel.readRemaining().readText()
+        }
         else -> ""
     }

@@ -110,6 +110,16 @@ actual suspend fun downloadArtifactFromUrl(url: String): Result<String> =
         }
     }
 
+actual suspend fun readBinaryFile(path: String): Result<ByteArray> =
+    runCatching {
+        withContext(Dispatchers.IO) {
+            val file = File(path)
+            require(file.exists()) { "文件不存在" }
+            require(file.isFile) { "请选择文件" }
+            file.readBytes()
+        }
+    }
+
 private data class ArtifactMetadata(
     val packageName: String? = null,
     val versionName: String? = null,

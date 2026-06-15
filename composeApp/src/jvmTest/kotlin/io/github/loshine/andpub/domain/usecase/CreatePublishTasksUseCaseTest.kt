@@ -9,6 +9,8 @@ import io.github.loshine.andpub.domain.model.ChannelRecord
 import io.github.loshine.andpub.domain.model.LocalStateSnapshot
 import io.github.loshine.andpub.domain.model.MarketType
 import io.github.loshine.andpub.domain.model.PackageType
+import io.github.loshine.andpub.domain.model.PublishMode
+import io.github.loshine.andpub.domain.model.PublishTaskRecord
 import io.github.loshine.andpub.domain.model.PublishTaskStatus
 import io.kotest.core.spec.style.StringSpec
 import io.kotest.matchers.collections.shouldContain
@@ -16,6 +18,41 @@ import io.kotest.matchers.shouldBe
 
 class CreatePublishTasksUseCaseTest : StringSpec({
     val app = AppRecord("app-1", "猫耳", "cn.missevan")
+
+    "creates visible pending tasks with ids matching prepared tasks" {
+        val useCase = CreatePublishTasksUseCase(
+            inspectArtifact = { path, _, _ -> Result.success(testInspection(path)) },
+        )
+        val channel = channel(MarketType.Vivo)
+        val oldTask = PublishTaskRecord(
+            id = "task-9",
+            appId = app.id,
+            channelId = channel.id,
+            marketType = channel.marketType,
+            publishMode = PublishMode.UnifiedArtifact,
+            artifact = ArtifactDraft(),
+            status = PublishTaskStatus.Failed,
+            logs = emptyList(),
+        )
+        val snapshot = LocalStateSnapshot(
+            apps = listOf(app),
+            channels = listOf(channel),
+            publishTasks = listOf(oldTask),
+            unifiedArtifact = ArtifactDraft(
+                sourceType = ArtifactSourceType.LocalFile,
+                value = "/tmp/app.apk",
+                packageName = "cn.missevan",
+            ),
+        )
+
+        val pending = useCase.createPendingTasks(snapshot, app, listOf(channel)).single()
+        val prepared = useCase(snapshot, app, listOf(channel)).single()
+
+        pending.id shouldBe "task-10"
+        pending.id shouldBe prepared.id
+        pending.status shouldBe PublishTaskStatus.Validating
+        pending.logs.single().message shouldBe "vivo 应用市场 正在准备并检查产物"
+    }
 
     "downloads url artifact for markets without direct url upload" {
         var downloadedUrl: String? = null
@@ -147,7 +184,7 @@ class CreatePublishTasksUseCaseTest : StringSpec({
             "腾讯应用开放平台 不支持 URL 直传，64 位 APK 已下载并检查后按本地文件上传"
     }
 
-    "downloads and inspects split url artifacts for markets with direct url upload" {
+    "downloads split url artifacts for vivo and converts to local upload files" {
         val downloadedUrls = mutableListOf<String>()
         val useCase = CreatePublishTasksUseCase(
             downloadUrlArtifact = {
@@ -177,17 +214,17 @@ class CreatePublishTasksUseCaseTest : StringSpec({
             "https://cdn.example.com/app-64.apk",
         )
         task.status shouldBe PublishTaskStatus.Ready
-        task.artifact.sourceType shouldBe ArtifactSourceType.Url
-        task.artifact.split32.value shouldBe "https://cdn.example.com/app-32.apk"
-        task.artifact.split64.value shouldBe "https://cdn.example.com/app-64.apk"
+        task.artifact.sourceType shouldBe ArtifactSourceType.LocalFile
+        task.artifact.split32.value shouldBe "/tmp/app-32.apk"
+        task.artifact.split64.value shouldBe "/tmp/app-64.apk"
         task.artifact.split32.downloadedPath shouldBe "/tmp/app-32.apk"
         task.artifact.split64.downloadedPath shouldBe "/tmp/app-64.apk"
         task.artifact.split32.packageName shouldBe "cn.missevan"
         task.artifact.split64.versionName shouldBe "1.2.3"
         task.logs.map { it.message } shouldContain
-            "vivo 应用市场 32 位 APK URL 已下载并检查，后续将直接提交 URL"
+            "vivo 应用市场 不支持 URL 直传，32 位 APK 已下载并检查后按本地文件上传"
         task.logs.map { it.message } shouldContain
-            "vivo 应用市场 64 位 APK URL 已下载并检查，后续将直接提交 URL"
+            "vivo 应用市场 不支持 URL 直传，64 位 APK 已下载并检查后按本地文件上传"
     }
 
     "fails url task when downloaded artifact has no manifest package" {

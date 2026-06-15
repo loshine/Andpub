@@ -17,3 +17,5 @@ expect suspend fun inspectLocalArtifact(
 ): Result<ArtifactInspection>
 
 expect suspend fun downloadArtifactFromUrl(url: String): Result<String>
+
+expect suspend fun readBinaryFile(path: String): Result<ByteArray>

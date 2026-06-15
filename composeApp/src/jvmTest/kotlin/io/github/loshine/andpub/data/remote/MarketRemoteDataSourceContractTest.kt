@@ -8,6 +8,7 @@ import io.github.loshine.andpub.data.remote.tencent.TencentRemoteDataSource
 import io.github.loshine.andpub.data.remote.vivo.VivoRemoteDataSource
 import io.github.loshine.andpub.data.remote.wecom.WeComWebhookRemoteDataSource
 import io.github.loshine.andpub.data.remote.xiaomi.XiaomiRemoteDataSource
+import io.github.loshine.andpub.domain.model.VivoApiEnvironment
 import io.kotest.assertions.throwables.shouldThrow
 import io.kotest.core.spec.style.StringSpec
 import io.kotest.matchers.shouldBe
@@ -295,6 +296,71 @@ class MarketRemoteDataSourceContractTest : StringSpec({
         body shouldContain "method=app.update.app"
         body shouldContain "packageName=com.example.app"
         body shouldContain "sign="
+    }
+
+    "vivo app detail routes through selected sandbox endpoint" {
+        val mock = CapturingHttpClient {
+            """{"code":"0","subCode":"0","msg":"ok","data":{"packageName":"com.example.app"}}"""
+        }
+
+        VivoRemoteDataSource(mock.client).queryAppDetails(
+            accessKey = "access",
+            accessSecret = "secret",
+            packageName = "com.example.app",
+            environment = VivoApiEnvironment.Sandbox,
+        )
+
+        val request = mock.requests.single()
+        request.url.host shouldBe "sandbox-developer-api.vivo.com.cn"
+        request.url.encodedPath shouldBe "/router/rest"
+        request.bodyText() shouldContain "method=app.query.details"
+    }
+
+    "vivo production remains default endpoint for legacy callers" {
+        val mock = CapturingHttpClient {
+            """{"code":"0","subCode":"0","msg":"ok","data":{"packageName":"com.example.app"}}"""
+        }
+
+        VivoRemoteDataSource(mock.client).queryAppDetails(
+            accessKey = "access",
+            accessSecret = "secret",
+            packageName = "com.example.app",
+        )
+
+        val request = mock.requests.single()
+        request.url.host shouldBe "developer-api.vivo.com.cn"
+    }
+
+    "vivo apk upload uses multipart file part and excludes file from signing body fields" {
+        val mock = CapturingHttpClient {
+            """{"code":"0","subCode":"0","msg":"ok","data":{"packageName":"com.example.app","serialnumber":"serial-1","fileMd5":"md5"}}"""
+        }
+
+        val result = VivoRemoteDataSource(mock.client).uploadApk(
+            accessKey = "access",
+            accessSecret = "secret",
+            packageName = "com.example.app",
+            fileName = "app.apk",
+            fileBytes = "apk-bytes".encodeToByteArray(),
+            fileMd5 = "md5",
+            environment = VivoApiEnvironment.Sandbox,
+        )
+
+        result.serialNumber shouldBe "serial-1"
+        val request = mock.requests.single()
+        request.method shouldBe HttpMethod.Post
+        request.url.host shouldBe "sandbox-developer-api.vivo.com.cn"
+        request.body.contentType?.toString().orEmpty() shouldContain "multipart/form-data"
+        request.body.contentType?.toString().orEmpty() shouldContain "boundary="
+        val body = request.bodyText()
+        body shouldContain "name=\"method\""
+        body shouldContain "app.upload.apk.app"
+        body shouldContain "name=\"file\""
+        body shouldContain "filename=\"app.apk\""
+        body shouldContain "apk-bytes"
+        body shouldContain "name=\"sign\""
+        body shouldContain "name=\"fileMd5\""
+        body.contains("file=apk-bytes") shouldBe false
     }
 
     "Tencent upload info signs form params and exposes COS presign data" {

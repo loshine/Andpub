@@ -77,6 +77,11 @@ import io.github.loshine.andpub.domain.model.PublishTaskRecord
 import io.github.loshine.andpub.domain.model.PublishTaskStatus
 import io.github.loshine.andpub.domain.model.SplitApkSlot
 import io.github.loshine.andpub.domain.model.ToolSettings
+import io.github.loshine.andpub.domain.model.VivoApiEnvironment
+import io.github.loshine.andpub.domain.model.VivoCompatibleDevice
+import io.github.loshine.andpub.domain.model.VivoOnlineType
+import io.github.loshine.andpub.domain.model.vivoEnvironment
+import io.github.loshine.andpub.domain.model.withVivoEnvironment
 import io.github.loshine.andpub.platform.inspectLocalArtifact
 import io.github.loshine.andpub.platform.inspectToolSettings
 import io.github.loshine.andpub.platform.pickArtifactFilePath
@@ -452,6 +457,9 @@ private fun AppDetail(
                     PublishProcessPage(
                         state = state,
                         onBack = { showPublishProcess = false },
+                        onRefreshTaskStatus = { taskId ->
+                            onIntent(AndpubIntent.RefreshPublishTaskStatus(taskId))
+                        },
                     )
                 } else {
                     PublishTargetSection(state, onIntent)
@@ -462,7 +470,7 @@ private fun AppDetail(
                         state = state,
                         onCreate = {
                             showPublishProcess = true
-                            onIntent(AndpubIntent.CreateMockPublishTasks)
+                            onIntent(AndpubIntent.CreatePublishTasks)
                         },
                     )
                 }
@@ -639,7 +647,7 @@ private fun ChannelSection(
             state = state,
             channel = editingChannel,
             onDismiss = { channelDialogId = null },
-            onSave = { channelId, name, marketType, marketAppId, credentials ->
+            onSave = { channelId, name, marketType, marketAppId, credentials, extraFields ->
                 onIntent(
                     AndpubIntent.AddOrUpdateChannel(
                         channelId = channelId,
@@ -647,19 +655,19 @@ private fun ChannelSection(
                         marketType = marketType,
                         marketAppId = marketAppId,
                         credentials = credentials,
-                        extraFields = emptyMap(),
+                        extraFields = extraFields,
                     )
                 )
                 channelDialogId = null
             },
-            onTest = { testKey, marketType, marketAppId, credentials ->
+            onTest = { testKey, marketType, marketAppId, credentials, extraFields ->
                 onIntent(
                     AndpubIntent.TestChannelConfig(
                         testKey = testKey,
                         marketType = marketType,
                         marketAppId = marketAppId,
                         credentials = credentials,
-                        extraFields = emptyMap(),
+                        extraFields = extraFields,
                     )
                 )
             },
@@ -720,12 +728,81 @@ private fun PublishTargetSection(
                         verticalArrangement = Arrangement.spacedBy(2.dp),
                     ) {
                         Text(channel.displayTitle(), style = MaterialTheme.typography.bodyLarge)
-                        Text(channel.marketType.displayName, style = MaterialTheme.typography.bodySmall)
+                        val details = if (channel.marketType == MarketType.Vivo) {
+                            "${channel.marketType.displayName} / ${channel.vivoEnvironment().displayName}"
+                        } else {
+                            channel.marketType.displayName
+                        }
+                        Text(details, style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }
+            if (state.publishTargetChannels.any { it.marketType == MarketType.Vivo }) {
+                VivoPublishOptionSection(state, onIntent)
+            }
             if (targetIds.isEmpty()) {
                 Text("勾选渠道后才会显示该渠道的发布配置。", style = MaterialTheme.typography.bodySmall)
+            }
+        }
+    }
+}
+
+@Composable
+private fun VivoPublishOptionSection(
+    state: AndpubUiState,
+    onIntent: (AndpubIntent) -> Unit,
+) {
+    val options = state.snapshot.vivoPublishOptions
+    val hasProductionVivo = state.publishTargetChannels.any {
+        it.marketType == MarketType.Vivo && it.vivoEnvironment() == VivoApiEnvironment.Production
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("vivo 发布选项", style = MaterialTheme.typography.titleSmall)
+        Text(
+            text = "vivo 会先确认目标环境中的应用已存在，再上传文件并提交更新。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            VivoOnlineType.entries.forEach { item ->
+                StableFilterChip(
+                    selected = options.onlineType == item,
+                    onClick = {
+                        onIntent(AndpubIntent.UpdateVivoPublishOptions(options.copy(onlineType = item)))
+                    },
+                    label = { Text(item.displayName) },
+                )
+            }
+        }
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            VivoCompatibleDevice.entries.forEach { item ->
+                StableFilterChip(
+                    selected = options.compatibleDevice == item,
+                    onClick = {
+                        onIntent(AndpubIntent.UpdateVivoPublishOptions(options.copy(compatibleDevice = item)))
+                    },
+                    label = { Text(item.displayName) },
+                )
+            }
+        }
+        if (hasProductionVivo) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Checkbox(
+                    checked = state.vivoProductionConfirmed,
+                    onCheckedChange = {
+                        onIntent(AndpubIntent.UpdateVivoProductionConfirmed(it))
+                    },
+                )
+                Text("确认向 vivo 正式环境提交更新", style = MaterialTheme.typography.bodySmall)
             }
         }
     }
@@ -771,6 +848,7 @@ private fun PublishTaskSection(
 private fun PublishProcessPage(
     state: AndpubUiState,
     onBack: () -> Unit,
+    onRefreshTaskStatus: (String) -> Unit,
 ) {
     val app = state.selectedApp ?: return
     val tasks = state.publishTasks.filter { it.appId == app.id }
@@ -804,7 +882,8 @@ private fun PublishProcessPage(
         }
 
         if (state.isCreatingPublishTasks && tasks.isEmpty()) {
-            Text("正在下载并检查产物...")
+            Text("正在准备并检查产物...")
+            return@Column
         }
 
         if (tasks.isEmpty()) {
@@ -821,7 +900,12 @@ private fun PublishProcessPage(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             gridItems(tasks, key = { it.id }) { task ->
-                PublishProcessCard(task, showDetailLogs)
+                PublishProcessCard(
+                    task = task,
+                    showDetailLogs = showDetailLogs,
+                    canRefreshStatus = task.canRefreshPublishStatus(),
+                    onRefreshStatus = { onRefreshTaskStatus(task.id) },
+                )
             }
         }
     }
@@ -831,6 +915,8 @@ private fun PublishProcessPage(
 private fun PublishProcessCard(
     task: PublishTaskRecord,
     showDetailLogs: Boolean,
+    canRefreshStatus: Boolean,
+    onRefreshStatus: () -> Unit,
 ) {
     OutlinedCard(modifier = Modifier.fillMaxWidth()) {
         Column(
@@ -843,13 +929,27 @@ private fun PublishProcessCard(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(task.marketType.displayName, style = MaterialTheme.typography.titleMedium)
-                Text(task.status.displayName, style = MaterialTheme.typography.labelLarge)
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(task.status.displayName, style = MaterialTheme.typography.labelLarge)
+                    if (canRefreshStatus) {
+                        TextButton(onClick = onRefreshStatus) {
+                            Text("刷新状态")
+                        }
+                    }
+                }
+            }
+            task.publishEnvironment?.let {
+                Text("目标环境：$it", style = MaterialTheme.typography.bodySmall)
             }
 
             if (showDetailLogs) {
                 task.logs.forEach { log ->
+                    val stage = log.stage?.let { "[${it.displayName}] " }.orEmpty()
                     Text(
-                        "${log.level.name}: ${log.message}",
+                        "${log.level.name}: $stage${log.message}",
                         color = log.level.color(),
                         style = MaterialTheme.typography.bodySmall,
                     )
@@ -862,6 +962,10 @@ private fun PublishProcessCard(
         }
     }
 }
+
+private fun PublishTaskRecord.canRefreshPublishStatus(): Boolean =
+    marketType == MarketType.Vivo &&
+            (status == PublishTaskStatus.Submitted || status == PublishTaskStatus.Accepted)
 
 @Composable
 private fun PublishProcessSection(
@@ -904,9 +1008,9 @@ private fun PublishTaskCard(
             }
             task.logs.forEach { log ->
                 val color = when (log.level) {
-                    io.github.loshine.andpub.domain.model.LogLevel.Info -> MaterialTheme.colorScheme.onSurface
-                    io.github.loshine.andpub.domain.model.LogLevel.Warning -> MaterialTheme.colorScheme.primary
-                    io.github.loshine.andpub.domain.model.LogLevel.Error -> MaterialTheme.colorScheme.error
+                    LogLevel.Info -> MaterialTheme.colorScheme.onSurface
+                    LogLevel.Warning -> MaterialTheme.colorScheme.primary
+                    LogLevel.Error -> MaterialTheme.colorScheme.error
                 }
                 Text(
                     "${log.level.name}: ${log.message}",
@@ -1011,8 +1115,8 @@ private fun ChannelEditorDialog(
     state: AndpubUiState,
     channel: ChannelRecord?,
     onDismiss: () -> Unit,
-    onSave: (String?, String, MarketType, String?, Map<String, String>) -> Unit,
-    onTest: (String, MarketType, String?, Map<String, String>) -> Unit,
+    onSave: (String?, String, MarketType, String?, Map<String, String>, Map<String, String>) -> Unit,
+    onTest: (String, MarketType, String?, Map<String, String>, Map<String, String>) -> Unit,
 ) {
     var marketType by remember(channel?.id) {
         mutableStateOf(
@@ -1021,6 +1125,9 @@ private fun ChannelEditorDialog(
     }
     var huaweiAuthMode by remember(channel?.id) {
         mutableStateOf(channel?.credentials?.huaweiAuthMode() ?: HuaweiAuthMode.ApiClient)
+    }
+    var vivoEnvironment by remember(channel?.id) {
+        mutableStateOf(channel?.vivoEnvironment() ?: VivoApiEnvironment.Production)
     }
     var serviceAccountInputMode by remember(channel?.id) {
         mutableStateOf(
@@ -1093,6 +1200,13 @@ private fun ChannelEditorDialog(
                     modifier = Modifier.fillMaxWidth(),
                 )
 
+                if (marketType == MarketType.Vivo) {
+                    VivoEnvironmentFields(
+                        environment = vivoEnvironment,
+                        onEnvironmentChange = { vivoEnvironment = it },
+                    )
+                }
+
                 FlowRow(
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -1134,6 +1248,7 @@ private fun ChannelEditorDialog(
                         marketType,
                         marketAppId,
                         credentials.toChannelCredentials(marketType, schema.credentialFields, huaweiAuthMode, serviceAccountInputMode),
+                        channel.extraFieldsFor(marketType, vivoEnvironment),
                     )
                 },
             ) {
@@ -1149,6 +1264,7 @@ private fun ChannelEditorDialog(
                             marketType,
                             marketAppId,
                             credentials.toChannelCredentials(marketType, schema.credentialFields, huaweiAuthMode, serviceAccountInputMode),
+                            channel.extraFieldsFor(marketType, vivoEnvironment),
                         )
                     },
                 ) {
@@ -1160,6 +1276,48 @@ private fun ChannelEditorDialog(
             }
         },
     )
+}
+
+@Composable
+private fun VivoEnvironmentFields(
+    environment: VivoApiEnvironment,
+    onEnvironmentChange: (VivoApiEnvironment) -> Unit,
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text("vivo API 环境", style = MaterialTheme.typography.titleSmall)
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            VivoApiEnvironment.entries.forEach { item ->
+                StableFilterChip(
+                    selected = environment == item,
+                    onClick = { onEnvironmentChange(item) },
+                    label = { Text(item.displayName) },
+                )
+            }
+        }
+        Text(
+            text = "测试环境和正式环境的 access_key / access_secret 彼此独立，不能混用。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+private fun ChannelRecord?.extraFieldsFor(
+    marketType: MarketType,
+    vivoEnvironment: VivoApiEnvironment,
+): Map<String, String> {
+    val base = this?.extraFields.orEmpty()
+    return if (marketType == MarketType.Vivo) {
+        base.withVivoEnvironment(vivoEnvironment)
+    } else {
+        base - VivoApiEnvironment.ExtraFieldKey
+    }
 }
 
 @Composable
@@ -1937,10 +2095,27 @@ private fun PublishTaskRecord.validationSummary(): List<String> {
 
 private fun PublishTaskRecord.publishSummary(): List<String> =
     when (status) {
-        PublishTaskStatus.Failed -> listOf("未进入发布：前置检查失败")
-        PublishTaskStatus.Ready -> listOf("待提交：当前阶段尚未调用厂商上传接口")
+        PublishTaskStatus.Failed -> listOf("失败：${logs.lastOrNull { it.level == LogLevel.Error }?.message ?: "发布失败"}")
+        PublishTaskStatus.Ready -> listOf(
+            if (marketType == MarketType.Vivo) {
+                "待提交：尚未调用 vivo 上传接口"
+            } else {
+                "仅完成校验：当前市场暂未接入厂商发布"
+            }
+        )
         PublishTaskStatus.Created -> listOf("已创建：等待检查")
         PublishTaskStatus.Validating -> listOf("检查中：正在准备产物")
+        PublishTaskStatus.Uploading -> listOf("上传中：正在调用厂商上传接口")
+        PublishTaskStatus.Submitted -> buildList {
+            add("已提交：等待厂商处理")
+            vendorTaskId?.let { add("任务 ID：$it") }
+            if (vendorUploadIds.isNotEmpty()) add("上传流水号：${vendorUploadIds.joinToString()}")
+        }
+        PublishTaskStatus.Accepted -> buildList {
+            add("已受理：厂商接口已返回成功")
+            vendorTaskId?.let { add("任务 ID：$it") }
+            if (vendorUploadIds.isNotEmpty()) add("上传流水号：${vendorUploadIds.joinToString()}")
+        }
     }
 
 @Composable

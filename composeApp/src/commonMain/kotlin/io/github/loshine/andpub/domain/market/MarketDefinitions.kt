@@ -69,7 +69,7 @@ object MarketDefinitions {
                 supportsUnifiedApk = true,
                 supportsSplitApk = true,
                 supportsAab = false,
-                supportsUserUrl = true,
+                supportsUserUrl = false,
                 supportsAppInfoQuery = true,
                 supportsPublishStatusQuery = true,
             ),

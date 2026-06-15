@@ -18,6 +18,8 @@ import io.github.loshine.andpub.data.repository.DefaultAndpubRepository
 import io.github.loshine.andpub.domain.market.MarketPublisher
 import io.github.loshine.andpub.domain.repository.AndpubRepository
 import io.github.loshine.andpub.domain.usecase.FetchMarketAppInfoUseCase
+import io.github.loshine.andpub.domain.usecase.ExecutePublishTasksUseCase
+import io.github.loshine.andpub.domain.usecase.RefreshPublishTaskStatusUseCase
 import io.github.loshine.andpub.network.httpClient
 import io.github.loshine.andpub.platform.createLocalStateStore
 import io.github.loshine.andpub.presentation.AndpubViewModel
@@ -56,5 +58,7 @@ val appModule = module {
     }
 
     factory { FetchMarketAppInfoUseCase(get()) }
-    viewModel { AndpubViewModel(get(), get(), get()) }
+    factory { ExecutePublishTasksUseCase(get()) }
+    factory { RefreshPublishTaskStatusUseCase(get()) }
+    viewModel { AndpubViewModel(get(), get(), get(), get(), get()) }
 }

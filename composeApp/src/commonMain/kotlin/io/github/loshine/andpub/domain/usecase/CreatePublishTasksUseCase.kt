@@ -14,6 +14,7 @@ import io.github.loshine.andpub.domain.model.PackageType
 import io.github.loshine.andpub.domain.model.PublishMode
 import io.github.loshine.andpub.domain.model.PublishTaskLog
 import io.github.loshine.andpub.domain.model.PublishTaskRecord
+import io.github.loshine.andpub.domain.model.PublishTaskStage
 import io.github.loshine.andpub.domain.model.PublishTaskStatus
 import io.github.loshine.andpub.domain.model.ToolSettings
 import io.github.loshine.andpub.platform.downloadArtifactFromUrl
@@ -23,6 +24,32 @@ class CreatePublishTasksUseCase(
     private val downloadUrlArtifact: suspend (String) -> Result<String> = ::downloadArtifactFromUrl,
     private val inspectArtifact: suspend (String, String, String) -> Result<ArtifactInspection> = ::inspectLocalArtifact,
 ) {
+    fun createPendingTasks(
+        snapshot: LocalStateSnapshot,
+        app: AppRecord,
+        channels: List<ChannelRecord>,
+    ): List<PublishTaskRecord> {
+        var nextId = snapshot.nextAvailableId()
+        return channels.map { channel ->
+            PublishTaskRecord(
+                id = "task-${nextId++}",
+                appId = app.id,
+                channelId = channel.id,
+                marketType = channel.marketType,
+                publishMode = snapshot.publishMode,
+                artifact = snapshot.artifactFor(channel),
+                status = PublishTaskStatus.Validating,
+                logs = listOf(
+                    PublishTaskLog(
+                        level = LogLevel.Info,
+                        message = "${channel.marketType.displayName} 正在准备并检查产物",
+                        stage = PublishTaskStage.Validation,
+                    ),
+                ),
+            )
+        }
+    }
+
     suspend operator fun invoke(
         snapshot: LocalStateSnapshot,
         app: AppRecord,
@@ -30,10 +57,7 @@ class CreatePublishTasksUseCase(
     ): List<PublishTaskRecord> {
         var nextId = snapshot.nextAvailableId()
         return channels.map { channel ->
-            val artifact = when (snapshot.publishMode) {
-                PublishMode.UnifiedArtifact -> snapshot.unifiedArtifact
-                PublishMode.PerChannelArtifact -> snapshot.channelArtifacts[channel.id] ?: ArtifactDraft()
-            }
+            val artifact = snapshot.artifactFor(channel)
             val prepared = runCatching {
                 prepareArtifact(channel, artifact, snapshot.toolSettings)
             }.getOrElse {
@@ -477,6 +501,12 @@ class CreatePublishTasksUseCase(
 
     private fun String.isHttpUrl(): Boolean =
         startsWith("http://") || startsWith("https://")
+
+    private fun LocalStateSnapshot.artifactFor(channel: ChannelRecord): ArtifactDraft =
+        when (publishMode) {
+            PublishMode.UnifiedArtifact -> unifiedArtifact
+            PublishMode.PerChannelArtifact -> channelArtifacts[channel.id] ?: ArtifactDraft()
+        }
 
     private fun LocalStateSnapshot.nextAvailableId(): Int {
         val ids = apps.map { it.id } + channels.map { it.id } + publishTasks.map { it.id }

@@ -26,13 +26,30 @@ import io.github.loshine.andpub.data.remote.tencent.TencentAppDetail
 import io.github.loshine.andpub.data.remote.tencent.TencentRemoteDataSource
 import io.github.loshine.andpub.data.remote.tencent.TencentUpdateStatus
 import io.github.loshine.andpub.data.remote.vivo.VivoAppDetail
+import io.github.loshine.andpub.data.remote.vivo.VivoOperationResult
 import io.github.loshine.andpub.data.remote.vivo.VivoRemoteDataSource
+import io.github.loshine.andpub.data.remote.vivo.VivoSplitUpdateRequest
+import io.github.loshine.andpub.data.remote.vivo.VivoTaskStatus
+import io.github.loshine.andpub.data.remote.vivo.VivoUnifiedUpdateRequest
+import io.github.loshine.andpub.data.remote.vivo.VivoUploadResult
 import io.github.loshine.andpub.data.remote.xiaomi.XiaomiPackageInfo
 import io.github.loshine.andpub.data.remote.xiaomi.XiaomiQueryAppResult
 import io.github.loshine.andpub.data.remote.xiaomi.XiaomiRemoteDataSource
 import io.github.loshine.andpub.domain.model.AppRecord
+import io.github.loshine.andpub.domain.model.ArtifactDraft
+import io.github.loshine.andpub.domain.model.ArtifactPart
 import io.github.loshine.andpub.domain.model.ChannelRecord
+import io.github.loshine.andpub.domain.model.MarketPublishRequest
 import io.github.loshine.andpub.domain.model.MarketType
+import io.github.loshine.andpub.domain.model.PackageType
+import io.github.loshine.andpub.domain.model.PublishMode
+import io.github.loshine.andpub.domain.model.PublishTaskRecord
+import io.github.loshine.andpub.domain.model.PublishTaskStatus
+import io.github.loshine.andpub.domain.model.VivoApiEnvironment
+import io.github.loshine.andpub.domain.model.VivoCompatibleDevice
+import io.github.loshine.andpub.domain.model.VivoOnlineType
+import io.github.loshine.andpub.domain.model.VivoPublishOptions
+import io.github.loshine.andpub.domain.model.withVivoEnvironment
 import io.kotest.core.spec.style.StringSpec
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
@@ -202,7 +219,7 @@ class MarketPublisherTest : StringSpec({
 
         info.marketAppId shouldBe "com.example.app"
         info.appName shouldBe "Xiaomi App"
-        info.auditStatus shouldBe "允许更新版本，不允许更新资料"
+        info.auditStatus shouldBe "小米暂不支持获取审核状态"
         info.releaseStatus shouldBe "已存在"
     }
 
@@ -233,11 +250,11 @@ class MarketPublisherTest : StringSpec({
 
     "vivo publisher follows docs: app query detail maps sale and online status" {
         val remote = mockk<VivoRemoteDataSource>()
-        coEvery { remote.queryAppDetails("access", "secret", "com.example.app") } returns VivoAppDetail(
+        coEvery { remote.queryAppDetails("access", "secret", "com.example.app", VivoApiEnvironment.Production) } returns VivoAppDetail(
             packageName = "com.example.app",
             appName = "vivo App",
             versionName = "4.0.0",
-            status = 1,
+            status = 3,
             saleStatus = 1,
             onlineStatus = null,
             onlineType = 1,
@@ -250,6 +267,144 @@ class MarketPublisherTest : StringSpec({
 
         info.auditStatus shouldBe "审核通过"
         info.releaseStatus shouldBe "已上架，实时上架"
+    }
+
+    "vivo publisher uploads and submits unified APK update" {
+        val remote = mockk<VivoRemoteDataSource>()
+        coEvery { remote.queryAppDetails("access", "secret", "com.example.app", VivoApiEnvironment.Sandbox) } returns
+            VivoAppDetail(packageName = "com.example.app")
+        coEvery {
+            remote.uploadApk(
+                accessKey = "access",
+                accessSecret = "secret",
+                packageName = "com.example.app",
+                fileName = "app.apk",
+                fileBytes = any(),
+                fileMd5 = "md5",
+                environment = VivoApiEnvironment.Sandbox,
+            )
+        } returns VivoUploadResult(packageName = "com.example.app", serialNumber = "serial-1", md5 = "md5")
+        coEvery {
+            remote.syncUpdateApp(
+                accessKey = "access",
+                accessSecret = "secret",
+                request = VivoUnifiedUpdateRequest(
+                    packageName = "com.example.app",
+                    versionCode = 100,
+                    apk = "serial-1",
+                    fileMd5 = "md5",
+                    onlineType = "1",
+                    compatibleDevice = "1",
+                ),
+                environment = VivoApiEnvironment.Sandbox,
+            )
+        } returns VivoOperationResult(message = "ok", taskId = "task-1")
+
+        val result = VivoMarketPublisher(remote, readFile = { Result.success("apk".encodeToByteArray()) })
+            .publish(vivoPublishRequest())
+            .getOrThrow()
+
+        result.status shouldBe PublishTaskStatus.Submitted
+        result.vendorTaskId shouldBe "task-1"
+        result.vendorUploadIds shouldBe listOf("serial-1")
+        coVerify { remote.syncUpdateApp(any(), any(), any(), VivoApiEnvironment.Sandbox) }
+    }
+
+    "vivo publisher returns failure when unified APK upload fails" {
+        val remote = mockk<VivoRemoteDataSource>()
+        coEvery { remote.queryAppDetails(any(), any(), any(), any()) } returns VivoAppDetail(packageName = "com.example.app")
+        coEvery {
+            remote.uploadApk(any(), any(), any(), any(), any(), any(), any(), any())
+        } throws IllegalStateException("upload rejected")
+
+        val result = VivoMarketPublisher(remote, readFile = { Result.success("apk".encodeToByteArray()) })
+            .publish(vivoPublishRequest())
+
+        result.isFailure shouldBe true
+        result.exceptionOrNull()?.message shouldContain "upload rejected"
+    }
+
+    "vivo publisher uploads split APKs and submits split update" {
+        val remote = mockk<VivoRemoteDataSource>()
+        coEvery { remote.queryAppDetails(any(), any(), any(), VivoApiEnvironment.Sandbox) } returns
+            VivoAppDetail(packageName = "com.example.app")
+        coEvery { remote.uploadApk32(any(), any(), any(), any(), any(), any(), any(), VivoApiEnvironment.Sandbox) } returns
+            VivoUploadResult(serialNumber = "serial-32")
+        coEvery { remote.uploadApk64(any(), any(), any(), any(), any(), any(), any(), VivoApiEnvironment.Sandbox) } returns
+            VivoUploadResult(serialNumber = "serial-64")
+        coEvery {
+            remote.syncUpdateSubpackageApp(
+                "access",
+                "secret",
+                VivoSplitUpdateRequest("com.example.app", "serial-32", "serial-64", "1", "1"),
+                VivoApiEnvironment.Sandbox,
+            )
+        } returns VivoOperationResult(message = "ok", taskId = "split-task")
+
+        val result = VivoMarketPublisher(remote, readFile = { Result.success("apk".encodeToByteArray()) })
+            .publish(vivoPublishRequest(task = splitPublishTask()))
+            .getOrThrow()
+
+        result.status shouldBe PublishTaskStatus.Submitted
+        result.vendorUploadIds shouldBe listOf("serial-32", "serial-64")
+    }
+
+    "vivo publisher refreshes task status to accepted when vendor reports success" {
+        val remote = mockk<VivoRemoteDataSource>()
+        coEvery {
+            remote.queryTaskStatus(
+                accessKey = "access",
+                accessSecret = "secret",
+                packageName = "com.example.app",
+                packetType = 0,
+                environment = VivoApiEnvironment.Sandbox,
+            )
+        } returns VivoTaskStatus(packageName = "com.example.app", taskStatus = 3)
+
+        val result = VivoMarketPublisher(remote)
+            .refreshPublishStatus(vivoPublishRequest(task = unifiedPublishTask().copy(status = PublishTaskStatus.Submitted)))
+            .getOrThrow()
+
+        result.status shouldBe PublishTaskStatus.Accepted
+        result.logs.single().message shouldContain "处理成功"
+    }
+
+    "vivo publisher does not submit split update when one split upload fails" {
+        val remote = mockk<VivoRemoteDataSource>()
+        coEvery { remote.queryAppDetails(any(), any(), any(), any()) } returns VivoAppDetail(packageName = "com.example.app")
+        coEvery { remote.uploadApk32(any(), any(), any(), any(), any(), any(), any(), any()) } returns
+            VivoUploadResult(serialNumber = "serial-32")
+        coEvery { remote.uploadApk64(any(), any(), any(), any(), any(), any(), any(), any()) } throws
+            IllegalStateException("64 failed")
+
+        val result = VivoMarketPublisher(remote, readFile = { Result.success("apk".encodeToByteArray()) })
+            .publish(vivoPublishRequest(task = splitPublishTask()))
+
+        result.isFailure shouldBe true
+        coVerify(exactly = 0) { remote.syncUpdateSubpackageApp(any(), any(), any(), any()) }
+    }
+
+    "vivo publisher fails before upload when submit options are missing" {
+        val remote = mockk<VivoRemoteDataSource>(relaxed = true)
+
+        val result = VivoMarketPublisher(remote, readFile = { Result.success("apk".encodeToByteArray()) })
+            .publish(vivoPublishRequest(options = VivoPublishOptions()))
+
+        result.isFailure shouldBe true
+        result.exceptionOrNull()?.message shouldContain "onlineType"
+        coVerify(exactly = 0) { remote.queryAppDetails(any(), any(), any(), any()) }
+    }
+
+    "vivo publisher fails before upload when existing app cannot be proven" {
+        val remote = mockk<VivoRemoteDataSource>()
+        coEvery { remote.queryAppDetails(any(), any(), any(), any()) } throws IllegalStateException("not found")
+
+        val result = VivoMarketPublisher(remote, readFile = { Result.success("apk".encodeToByteArray()) })
+            .publish(vivoPublishRequest())
+
+        result.isFailure shouldBe true
+        result.exceptionOrNull()?.message shouldContain "首次创建不支持"
+        coVerify(exactly = 0) { remote.uploadApk(any(), any(), any(), any(), any(), any(), any(), any()) }
     }
 
     "Tencent publisher follows docs: app detail, update audit status, store version fallback" {
@@ -294,6 +449,7 @@ private fun channel(
     marketType: MarketType,
     marketAppId: String? = null,
     credentials: Map<String, String>,
+    extraFields: Map<String, String> = emptyMap(),
 ): ChannelRecord =
     ChannelRecord(
         id = "channel-${marketType.name}",
@@ -301,5 +457,52 @@ private fun channel(
         marketType = marketType,
         marketAppId = marketAppId,
         credentials = credentials,
-        extraFields = emptyMap(),
+        extraFields = extraFields,
+    )
+
+private fun vivoPublishRequest(
+    task: PublishTaskRecord = unifiedPublishTask(),
+    options: VivoPublishOptions = VivoPublishOptions(
+        onlineType = VivoOnlineType.Realtime,
+        compatibleDevice = VivoCompatibleDevice.Phone,
+        productionConfirmed = true,
+    ),
+): MarketPublishRequest =
+    MarketPublishRequest(
+        app = AppRecord("app-1", "Local App", "com.example.app"),
+        channel = channel(
+            MarketType.Vivo,
+            credentials = mapOf("accessKey" to "access", "accessSecret" to "secret"),
+            extraFields = emptyMap<String, String>().withVivoEnvironment(VivoApiEnvironment.Sandbox),
+        ),
+        task = task,
+        vivoOptions = options,
+    )
+
+private fun unifiedPublishTask(): PublishTaskRecord =
+    PublishTaskRecord(
+        id = "task-1",
+        appId = "app-1",
+        channelId = "channel-Vivo",
+        marketType = MarketType.Vivo,
+        publishMode = PublishMode.UnifiedArtifact,
+        artifact = ArtifactDraft(
+            packageType = PackageType.Apk,
+            value = "/tmp/app.apk",
+            md5 = "md5",
+            packageName = "com.example.app",
+            versionCode = 100,
+        ),
+        status = PublishTaskStatus.Ready,
+        logs = emptyList(),
+    )
+
+private fun splitPublishTask(): PublishTaskRecord =
+    unifiedPublishTask().copy(
+        publishMode = PublishMode.PerChannelArtifact,
+        artifact = ArtifactDraft(
+            packageType = PackageType.SplitApk,
+            split32 = ArtifactPart(value = "/tmp/app-32.apk", md5 = "md5-32", packageName = "com.example.app"),
+            split64 = ArtifactPart(value = "/tmp/app-64.apk", md5 = "md5-64", packageName = "com.example.app"),
+        ),
     )
