@@ -23,6 +23,9 @@ import io.github.loshine.andpub.domain.model.PublishTaskStatus
 import io.github.loshine.andpub.domain.model.SplitApkSlot
 import io.github.loshine.andpub.domain.model.ToolSettings
 import io.github.loshine.andpub.domain.model.VivoPublishOptions
+import io.github.loshine.andpub.domain.model.displayAuditStatus
+import io.github.loshine.andpub.domain.model.displayOnlineVersion
+import io.github.loshine.andpub.domain.model.displayReviewingVersion
 import io.github.loshine.andpub.domain.repository.AndpubRepository
 import io.github.loshine.andpub.domain.usecase.BuildAppSettingsExportUseCase
 import io.github.loshine.andpub.domain.usecase.ImportAppSettingsUseCase
@@ -1155,9 +1158,9 @@ private fun buildMarketVersionReport(
                 appendLine("- 状态：查询失败")
                 appendLine("- 错误：${channel.lastError ?: "未知错误"}")
             } else {
-                appendLine("- 线上版本：${info.onlineVersion ?: "-"}")
-                appendLine("- 正在审核版本：${info.reviewingVersion ?: "-"}")
-                appendLine("- 审核状态：${info.auditStatus ?: "-"}")
+                appendLine("- 线上版本：${info.displayOnlineVersion()}")
+                appendLine("- 正在审核版本：${info.displayReviewingVersion(channel.marketType)}")
+                appendLine("- 审核状态：${info.displayAuditStatus(channel.marketType)}")
             }
             appendLine()
         }

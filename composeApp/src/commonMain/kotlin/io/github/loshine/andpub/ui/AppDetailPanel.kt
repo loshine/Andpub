@@ -11,9 +11,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.outlined.Add
-import androidx.compose.material.icons.outlined.Notifications
-import androidx.compose.material.icons.outlined.NotificationsNone
+import androidx.compose.material.icons.outlined.NotificationsOff
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
@@ -51,7 +51,6 @@ import io.github.loshine.andpub.ui.components.ChannelInfoDialog
 import io.github.loshine.andpub.ui.components.ChannelSummaryCard
 import io.github.loshine.andpub.ui.components.ChannelEditorDialog
 import io.github.loshine.andpub.ui.components.EmptyState
-import io.github.loshine.andpub.ui.components.StableFilterChip
 import io.github.loshine.andpub.ui.components.VivoPublishOptionSection
 import io.github.loshine.andpub.ui.components.displayTitle
 import io.github.loshine.andpub.ui.components.toChannelCredentials
@@ -210,34 +209,35 @@ private fun ChannelSection(state: AndpubUiState, onIntent: (AndpubIntent) -> Uni
     var channelDialogId by remember(state.selectedAppId) { mutableStateOf<String?>(null) }
     var deletingChannelId by remember(state.selectedAppId) { mutableStateOf<String?>(null) }
     var infoChannelId by remember(state.selectedAppId) { mutableStateOf<String?>(null) }
-    var notifyAfterQuery by remember(state.selectedAppId) { mutableStateOf(false) }
+    var notifyAfterQuery by rememberSaveable(state.selectedAppId) { mutableStateOf(false) }
     val expandedChannels = remember(state.selectedAppId) { mutableStateMapOf<String, Boolean>() }
     val editingChannel = state.selectedChannels.firstOrNull { it.id == channelDialogId }
     val deletingChannel = state.selectedChannels.firstOrNull { it.id == deletingChannelId }
     val infoChannel = state.selectedChannels.firstOrNull { it.id == infoChannelId }
 
-    Row(
+    Column(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Text(
             "渠道以独立记录保存，可按市场新增、编辑、删除，并查询市场侧应用信息。",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.weight(1f),
         )
         Row(
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(4.dp, Alignment.End),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             IconButton(
                 onClick = { notifyAfterQuery = !notifyAfterQuery },
             ) {
                 Icon(
-                    if (notifyAfterQuery) Icons.Outlined.Notifications
-                    else Icons.Outlined.NotificationsNone,
+                    imageVector = if (notifyAfterQuery) Icons.Filled.Notifications
+                    else Icons.Outlined.NotificationsOff,
                     contentDescription = if (notifyAfterQuery) "关闭通知" else "开启通知",
+                    tint = if (notifyAfterQuery) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
             IconButton(

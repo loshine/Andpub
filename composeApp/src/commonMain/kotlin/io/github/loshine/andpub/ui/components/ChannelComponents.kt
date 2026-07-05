@@ -1,5 +1,6 @@
 package io.github.loshine.andpub.ui.components
 
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
@@ -8,26 +9,27 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.Error
 import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.ExpandMore
+import androidx.compose.material.icons.outlined.HourglassEmpty
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.AssistChip
-import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedCard
-import androidx.compose.material3.SuggestionChip
-import androidx.compose.material3.SuggestionChipDefaults
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -50,6 +52,9 @@ import io.github.loshine.andpub.domain.model.MarketAppInfo
 import io.github.loshine.andpub.domain.model.MarketCapability
 import io.github.loshine.andpub.domain.model.MarketType
 import io.github.loshine.andpub.domain.model.VivoApiEnvironment
+import io.github.loshine.andpub.domain.model.displayAuditStatus
+import io.github.loshine.andpub.domain.model.displayOnlineVersion
+import io.github.loshine.andpub.domain.model.displayReviewingVersion
 import io.github.loshine.andpub.domain.model.vivoEnvironment
 import io.github.loshine.andpub.domain.model.withVivoEnvironment
 import io.github.loshine.andpub.presentation.AndpubUiState
@@ -90,11 +95,16 @@ fun ChannelSummaryCard(
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
-                        SyncStatusChip(channel.syncStatus)
+                        SyncStatusLabel(channel.syncStatus)
                     }
                     channel.appInfo?.let { info ->
                         Text(
-                            "线上：${info.onlineVersion ?: "-"}  审核：${info.reviewingVersion ?: "-"}",
+                            "线上：${info.displayOnlineVersion()}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Text(
+                            "审核：${info.displayReviewingVersion(channel.marketType)}",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -138,25 +148,32 @@ fun ChannelSummaryCard(
 }
 
 @Composable
-private fun SyncStatusChip(status: ChannelSyncStatus) {
-    val containerColor = when (status) {
-        ChannelSyncStatus.Synced -> MaterialTheme.colorScheme.primaryContainer
-        ChannelSyncStatus.Failed -> MaterialTheme.colorScheme.errorContainer
-        else -> MaterialTheme.colorScheme.surfaceVariant
+private fun SyncStatusLabel(status: ChannelSyncStatus) {
+    val (icon, color) = when (status) {
+        ChannelSyncStatus.Syncing ->
+            Icons.Outlined.HourglassEmpty to MaterialTheme.colorScheme.onSurfaceVariant
+        ChannelSyncStatus.Synced ->
+            Icons.Outlined.CheckCircle to MaterialTheme.colorScheme.primary
+        ChannelSyncStatus.Failed ->
+            Icons.Outlined.Error to MaterialTheme.colorScheme.error
+        ChannelSyncStatus.NotSynced -> return
     }
-    val labelColor = when (status) {
-        ChannelSyncStatus.Synced -> MaterialTheme.colorScheme.onPrimaryContainer
-        ChannelSyncStatus.Failed -> MaterialTheme.colorScheme.onErrorContainer
-        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            icon,
+            contentDescription = null,
+            modifier = Modifier.size(14.dp),
+            tint = color,
+        )
+        Text(
+            status.displayName,
+            style = MaterialTheme.typography.labelSmall,
+            color = color,
+        )
     }
-    SuggestionChip(
-        onClick = {},
-        label = { Text(status.displayName, style = MaterialTheme.typography.labelSmall) },
-        colors = SuggestionChipDefaults.suggestionChipColors(
-            containerColor = containerColor,
-            labelColor = labelColor,
-        ),
-    )
 }
 
 @Composable
@@ -178,28 +195,47 @@ private fun ChannelExpandedContent(channel: ChannelRecord) {
 
 @Composable
 fun CapabilityChips(capability: MarketCapability) {
-    FlowRow(
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        if (capability.supportsUnifiedApk) CapBadge("APK")
-        if (capability.supportsSplitApk) CapBadge("32/64")
-        if (capability.supportsAab) CapBadge("AAB")
-        if (capability.supportsUserUrl) CapBadge("URL")
-        if (capability.supportsAppInfoQuery) CapBadge("详情查询")
+    val labels = buildList {
+        if (capability.supportsUnifiedApk) add("APK")
+        if (capability.supportsSplitApk) add("32/64")
+        if (capability.supportsAab) add("AAB")
+        if (capability.supportsUserUrl) add("URL")
+        if (capability.supportsAppInfoQuery) add("详情查询")
+    }
+    if (labels.isEmpty()) return
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(
+            "支持能力",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            labels.forEach { CapabilityBadge(it) }
+        }
     }
 }
 
 @Composable
-private fun CapBadge(label: String) {
-    AssistChip(
-        onClick = {},
-        label = { Text(label, style = MaterialTheme.typography.labelSmall) },
-        colors = AssistChipDefaults.assistChipColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant,
-            labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+private fun CapabilityBadge(label: String) {
+    Surface(
+        shape = MaterialTheme.shapes.small,
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+        modifier = Modifier.border(
+            width = 1.dp,
+            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f),
+            shape = MaterialTheme.shapes.small,
         ),
-    )
+    ) {
+        Text(
+            label,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
 }
 
 // ─── Channel info dialog ───────────────────────────────────────────────────────
@@ -216,7 +252,7 @@ fun ChannelInfoDialog(channel: ChannelRecord, onDismiss: () -> Unit) {
                 if (channel.syncStatus == ChannelSyncStatus.Syncing) {
                     Text("正在获取市场侧应用信息…")
                 } else {
-                    channel.appInfo?.let { MarketAppInfoContent(it) }
+                    channel.appInfo?.let { MarketAppInfoContent(it, channel.marketType) }
                 }
                 channel.lastError?.let {
                     Text("错误：$it", color = MaterialTheme.colorScheme.error)
@@ -228,14 +264,14 @@ fun ChannelInfoDialog(channel: ChannelRecord, onDismiss: () -> Unit) {
 }
 
 @Composable
-fun MarketAppInfoContent(info: MarketAppInfo) {
+fun MarketAppInfoContent(info: MarketAppInfo, marketType: MarketType) {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text("市场应用 ID：${info.marketAppId}")
         Text("应用名：${info.appName}")
         Text("包名：${info.packageName}")
-        Text("线上版本：${info.onlineVersion ?: "-"}")
-        Text("正在审核版本：${info.reviewingVersion ?: "-"}")
-        Text("审核状态：${info.auditStatus ?: "-"}")
+        Text("线上版本：${info.displayOnlineVersion()}")
+        Text("正在审核版本：${info.displayReviewingVersion(marketType)}")
+        Text("审核状态：${info.displayAuditStatus(marketType)}")
         Text("上架状态：${info.releaseStatus ?: "-"}")
         Text("更新时间：${info.updatedAtText}")
     }
@@ -372,7 +408,11 @@ fun ChannelEditorDialog(
                 }
 
                 if (testState?.info != null || testState?.error != null) {
-                    ConnectionTestResult(info = testState.info, error = testState.error)
+                    ConnectionTestResult(
+                        marketType = marketType,
+                        info = testState.info,
+                        error = testState.error,
+                    )
                 }
             }
         },
@@ -558,10 +598,14 @@ internal fun HuaweiCredentialFields(
 }
 
 @Composable
-private fun ConnectionTestResult(info: MarketAppInfo?, error: String?) {
+private fun ConnectionTestResult(
+    marketType: MarketType,
+    info: MarketAppInfo?,
+    error: String?,
+) {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text("测试连接结果", style = MaterialTheme.typography.titleSmall)
-        info?.let { MarketAppInfoContent(it) }
+        info?.let { MarketAppInfoContent(it, marketType) }
         error?.let { Text("错误：$it", color = MaterialTheme.colorScheme.error) }
     }
 }

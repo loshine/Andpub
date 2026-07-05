@@ -221,6 +221,20 @@ data class MarketAppInfo(
     val updatedAtText: String,
 )
 
+fun MarketAppInfo.displayOnlineVersion(): String = onlineVersion ?: "-"
+
+fun MarketAppInfo.displayReviewingVersion(marketType: MarketType): String =
+    when (marketType) {
+        MarketType.Tencent, MarketType.Xiaomi -> "暂不支持"
+        else -> reviewingVersion ?: "-"
+    }
+
+fun MarketAppInfo.displayAuditStatus(marketType: MarketType): String =
+    when (marketType) {
+        MarketType.Xiaomi -> "暂不支持"
+        else -> auditStatus ?: "-"
+    }
+
 @Serializable
 data class ToolSettings(
     val androidSdkPath: String = "",

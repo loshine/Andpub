@@ -84,13 +84,13 @@ internal fun AppListScreen(
                     IconButton(
                         onClick = { onIntent(AndpubIntent.ImportAppSettings) },
                     ) {
-                        Icon(Icons.Outlined.FileUpload, contentDescription = "导入应用设置")
+                        Icon(Icons.Outlined.FileDownload, contentDescription = "导入应用设置")
                     }
                     IconButton(
                         onClick = { onIntent(AndpubIntent.ExportSelectedAppSettings) },
                         enabled = state.selectedApp != null,
                     ) {
-                        Icon(Icons.Outlined.FileDownload, contentDescription = "导出当前应用设置")
+                        Icon(Icons.Outlined.FileUpload, contentDescription = "导出当前应用设置")
                     }
                 },
                 scrollBehavior = scrollBehavior,
@@ -216,30 +216,28 @@ internal fun AppSidebar(
         }
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            IconButton(
+            OutlinedButton(
                 onClick = { onIntent(AndpubIntent.ImportAppSettings) },
                 modifier = Modifier.weight(1f),
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    Icon(Icons.Outlined.FileUpload, contentDescription = "导入")
-                    Text("导入", style = MaterialTheme.typography.labelMedium)
-                }
+                Icon(
+                    Icons.Outlined.FileDownload,
+                    contentDescription = null,
+                    modifier = Modifier.padding(end = 4.dp),
+                )
+                Text("导入")
             }
-            IconButton(
+            OutlinedButton(
                 onClick = { onIntent(AndpubIntent.ExportSelectedAppSettings) },
                 enabled = state.selectedApp != null,
                 modifier = Modifier.weight(1f),
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    Icon(Icons.Outlined.FileDownload, contentDescription = "导出")
-                    Text("导出", style = MaterialTheme.typography.labelMedium)
-                }
+                Icon(
+                    Icons.Outlined.FileUpload,
+                    contentDescription = null,
+                    modifier = Modifier.padding(end = 4.dp),
+                )
+                Text("导出")
             }
         }
 

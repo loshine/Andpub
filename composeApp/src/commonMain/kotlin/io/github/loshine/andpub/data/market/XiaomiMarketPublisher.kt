@@ -44,8 +44,8 @@ class XiaomiMarketPublisher(
                 packageName = info?.packageName ?: app.packageName,
                 appName = info?.appName ?: app.name,
                 onlineVersion = info?.versionName,
-                reviewingVersion = "小米接口暂不支持获取审核中版本",
-                auditStatus = "小米暂不支持获取审核状态",
+                reviewingVersion = null,
+                auditStatus = null,
                 releaseStatus = releaseStatusText(info, result.create),
                 updatedAtText = "小米 API",
             )

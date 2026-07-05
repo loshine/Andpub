@@ -220,7 +220,7 @@ class MarketPublisherTest : StringSpec({
 
         info.marketAppId shouldBe "com.example.app"
         info.appName shouldBe "Xiaomi App"
-        info.auditStatus shouldBe "小米暂不支持获取审核状态"
+        info.auditStatus shouldBe null
         info.releaseStatus shouldBe "已存在"
     }
 
