@@ -184,6 +184,12 @@ private fun AppSidebar(
         ) {
             Text("导出当前应用设置")
         }
+        OutlinedButton(
+            onClick = { onIntent(AndpubIntent.ImportAppSettings) },
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text("导入应用设置")
+        }
 
         Text("应用列表", style = MaterialTheme.typography.titleMedium)
         LazyColumn(

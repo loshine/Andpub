@@ -25,6 +25,7 @@ import io.github.loshine.andpub.domain.model.ToolSettings
 import io.github.loshine.andpub.domain.model.VivoPublishOptions
 import io.github.loshine.andpub.domain.repository.AndpubRepository
 import io.github.loshine.andpub.domain.usecase.BuildAppSettingsExportUseCase
+import io.github.loshine.andpub.domain.usecase.ImportAppSettingsUseCase
 import io.github.loshine.andpub.domain.usecase.CreatePublishTasksUseCase
 import io.github.loshine.andpub.domain.usecase.ExecutePublishTasksUseCase
 import io.github.loshine.andpub.domain.usecase.FetchMarketAppInfoUseCase
@@ -33,6 +34,7 @@ import io.github.loshine.andpub.domain.usecase.RefreshPublishTaskStatusUseCase
 import io.github.loshine.andpub.domain.usecase.UpdateAndpubStateUseCase
 import io.github.loshine.andpub.domain.usecase.ValidateChannelCredentialsUseCase
 import io.github.loshine.andpub.domain.usecase.ValidatePackageNameUseCase
+import io.github.loshine.andpub.platform.openTextFile
 import io.github.loshine.andpub.platform.saveTextFile
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -90,6 +92,7 @@ sealed interface AndpubIntent {
     data class DeleteApp(val appId: String) : AndpubIntent
     data class SelectApp(val appId: String) : AndpubIntent
     data object ExportSelectedAppSettings : AndpubIntent
+    data object ImportAppSettings : AndpubIntent
     data class UpdatePublishMode(val mode: PublishMode) : AndpubIntent
     data class UpdateVivoPublishOptions(val options: VivoPublishOptions) : AndpubIntent
     data class UpdateVivoProductionConfirmed(val confirmed: Boolean) : AndpubIntent
@@ -175,6 +178,7 @@ class AndpubViewModel(
     private val validateChannelCredentials: ValidateChannelCredentialsUseCase = ValidateChannelCredentialsUseCase(),
     private val createPublishTaskRecords: CreatePublishTasksUseCase = CreatePublishTasksUseCase(),
     private val buildAppSettingsExport: BuildAppSettingsExportUseCase = BuildAppSettingsExportUseCase(),
+    private val importAppSettingsUseCase: ImportAppSettingsUseCase = ImportAppSettingsUseCase(),
 ) : ViewModel() {
     private val observeState = ObserveAndpubStateUseCase(repository)
     private val updateState = UpdateAndpubStateUseCase(repository)
@@ -213,6 +217,7 @@ class AndpubViewModel(
                 reduce { it.copy(selectedAppId = intent.appId) }
             }
             AndpubIntent.ExportSelectedAppSettings -> exportSelectedAppSettings()
+            AndpubIntent.ImportAppSettings -> importAppSettings()
             is AndpubIntent.UpdatePublishMode -> {
                 clearVivoProductionConfirmation()
                 reduce { it.copy(publishMode = intent.mode) }
@@ -484,6 +489,56 @@ class AndpubViewModel(
                     message.value = "导出应用设置失败：${it.message ?: "未知错误"}"
                 },
             )
+        }
+    }
+
+    private fun importAppSettings() {
+        viewModelScope.launch {
+            runCatching { openTextFile("导入应用设置") }
+                .onFailure {
+                    message.value = "打开文件失败：${it.message ?: "未知错误"}"
+                    return@launch
+                }
+                .onSuccess { json ->
+                    if (json == null) {
+                        message.value = "已取消导入"
+                        return@launch
+                    }
+                    val snapshot = uiState.value.snapshot
+                    importAppSettingsUseCase(json, snapshot)
+                        .onSuccess { result ->
+                            reduce {
+                                var s = it
+                                val existingApp = s.apps.firstOrNull { a -> a.id == result.app.id }
+                                if (existingApp == null) {
+                                    s = s.copy(
+                                        apps = s.apps + result.app,
+                                        selectedAppId = result.app.id,
+                                    )
+                                }
+                                val newChannelIds = result.channels.map { ch -> ch.id }
+                                s = s.copy(
+                                    channels = s.channels + result.channels,
+                                    channelArtifacts = s.channelArtifacts +
+                                            result.channels.associate { ch -> ch.id to ArtifactDraft() },
+                                )
+                                s
+                            }
+                            val appLabel = result.app.name
+                            val channelCount = result.channels.size
+                            val warnings = result.warnings
+                            message.value = buildString {
+                                append("已导入应用「$appLabel」，新增 $channelCount 个渠道")
+                                if (warnings.isNotEmpty()) {
+                                    append("；")
+                                    append(warnings.joinToString("；"))
+                                }
+                            }
+                        }
+                        .onFailure {
+                            message.value = "导入失败：${it.message ?: "未知错误"}"
+                        }
+                }
         }
     }
 
