@@ -408,26 +408,6 @@ private fun <T> Result<T>.mapFailureWithEnvironment(channel: ChannelRecord): Res
         },
     )
 
-private fun String.fileName(): String =
-    trim().substringAfterLast('/').substringAfterLast('\\').ifBlank { "artifact.apk" }
-
-private fun MutableList<PublishTaskLog>.emit(
-    request: MarketPublishRequest,
-    log: PublishTaskLog,
-) {
-    add(log)
-    request.onLog(log)
-}
-
-private fun Long.readableBytes(): String {
-    val mb = this / (1024.0 * 1024.0)
-    return if (mb >= 1.0) {
-        "${(mb * 10).toInt() / 10.0} MB"
-    } else {
-        "${this / 1024} KB"
-    }
-}
-
 private fun Throwable.isUnsupportedSandboxAppDetail(): Boolean {
     val text = message.orEmpty()
     return "code=10010" in text || "此功能不存在" in text

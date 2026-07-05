@@ -268,13 +268,8 @@ class OppoMarketPublisher(
         return Pair(uploadedUrl, uploadMd5)
     }
 
-    private fun resolveLocalPath(artifact: io.github.loshine.andpub.domain.model.ArtifactDraft): String {
-        if (artifact.sourceType == ArtifactSourceType.LocalFile) {
-            return artifact.value.takeIf { it.isNotBlank() } ?: error("缺少 APK 文件路径")
-        }
-        return artifact.downloadedPath.takeIf { it.isNotBlank() }
-            ?: error("OPPO 不支持直接 URL 发布，请切换为本地文件模式")
-    }
+    private fun resolveLocalPath(artifact: io.github.loshine.andpub.domain.model.ArtifactDraft): String =
+        artifact.resolveLocalPath("OPPO 不支持直接 URL 发布，请切换为本地文件模式")
 
     private fun statusText(status: String): String =
         when (status) {
@@ -296,15 +291,4 @@ class OppoMarketPublisher(
             "444" -> "审核不通过"
             else -> status
         }
-}
-
-private fun String.fileName(): String =
-    trim().substringAfterLast('/').substringAfterLast('\\').ifBlank { "artifact.apk" }
-
-private fun MutableList<PublishTaskLog>.emit(
-    request: MarketPublishRequest,
-    log: PublishTaskLog,
-) {
-    add(log)
-    request.onLog(log)
 }

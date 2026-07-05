@@ -77,10 +77,3 @@ class ImportAppSettingsUseCase {
         val importJson = Json { ignoreUnknownKeys = true }
     }
 }
-
-private fun LocalStateSnapshot.nextAvailableId(): Int {
-    val ids = apps.map { it.id } + channels.map { it.id }
-    return ids.maxOfOrNull { id ->
-        id.substringAfterLast("-").toIntOrNull() ?: 0
-    }?.plus(1) ?: 1
-}

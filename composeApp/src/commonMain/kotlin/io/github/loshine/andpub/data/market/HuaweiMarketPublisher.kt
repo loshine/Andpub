@@ -251,11 +251,3 @@ class HuaweiMarketPublisher(
             else -> "未知分阶段发布状态($state)"
         }
 }
-
-private fun MutableList<PublishTaskLog>.emit(
-    request: MarketPublishRequest,
-    log: PublishTaskLog,
-) {
-    add(log)
-    request.onLog(log)
-}

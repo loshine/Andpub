@@ -341,7 +341,14 @@ data class LocalStateSnapshot(
     val publishMode: PublishMode = PublishMode.UnifiedArtifact,
     val publishChannelIds: List<String> = emptyList(),
     val vivoPublishOptions: VivoPublishOptions = VivoPublishOptions(),
-)
+) {
+    fun nextAvailableId(): Int {
+        val ids = apps.map { it.id } + channels.map { it.id } + publishTasks.map { it.id }
+        return ids.maxOfOrNull { id ->
+            id.substringAfterLast("-").toIntOrNull() ?: 0
+        }?.plus(1) ?: 1
+    }
+}
 
 @Serializable
 data class VivoPublishOptions(

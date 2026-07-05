@@ -516,7 +516,6 @@ class AndpubViewModel(
                                         selectedAppId = result.app.id,
                                     )
                                 }
-                                val newChannelIds = result.channels.map { ch -> ch.id }
                                 s = s.copy(
                                     channels = s.channels + result.channels,
                                     channelArtifacts = s.channelArtifacts +
@@ -789,10 +788,11 @@ class AndpubViewModel(
                         onTaskLog = ::appendPublishTaskLog,
                     )
                     replacePublishTasksForApp(app.id, tasks)
+                    val channelById = state.publishTargetChannels.associateBy { it.id }
                     coroutineScope {
                         tasks.map { task ->
                             async {
-                                val channel = state.publishTargetChannels.firstOrNull { it.id == task.channelId }
+                                val channel = channelById[task.channelId]
                                 if (channel == null) {
                                     task.copy(
                                         status = PublishTaskStatus.Failed,
@@ -866,9 +866,10 @@ class AndpubViewModel(
             message.value = "正在重试 ${failedTasks.size} 个失败任务..."
             try {
                 coroutineScope {
+                    val channelById = state.publishTargetChannels.associateBy { it.id }
                     failedTasks.map { task ->
                         async {
-                            val channel = state.publishTargetChannels.firstOrNull { it.id == task.channelId }
+                            val channel = channelById[task.channelId]
                             if (channel == null) {
                                 task.copy(
                                     status = PublishTaskStatus.Failed,
@@ -1035,13 +1036,6 @@ class AndpubViewModel(
 
     private fun LocalStateSnapshot.newId(prefix: String): String =
         "$prefix-${nextAvailableId()}"
-
-    private fun LocalStateSnapshot.nextAvailableId(): Int {
-        val ids = apps.map { it.id } + channels.map { it.id } + publishTasks.map { it.id }
-        return ids.maxOfOrNull { id ->
-            id.substringAfterLast("-").toIntOrNull() ?: 0
-        }?.plus(1) ?: 1
-    }
 
     private fun MutableStateFlow<Map<String, ChannelTestUiState>>.updateTest(
         testKey: String,

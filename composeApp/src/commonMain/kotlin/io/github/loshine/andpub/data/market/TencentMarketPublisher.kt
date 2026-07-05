@@ -279,13 +279,8 @@ class TencentMarketPublisher(
         return Pair(serialNumber, md5.takeIf { it.isNotBlank() }.orEmpty())
     }
 
-    private fun resolveLocalPath(artifact: io.github.loshine.andpub.domain.model.ArtifactDraft): String {
-        if (artifact.sourceType == ArtifactSourceType.LocalFile) {
-            return artifact.value.takeIf { it.isNotBlank() } ?: error("缺少 APK 文件路径")
-        }
-        return artifact.downloadedPath.takeIf { it.isNotBlank() }
-            ?: error("腾讯不支持直接 URL 发布，请切换为本地文件模式")
-    }
+    private fun resolveLocalPath(artifact: io.github.loshine.andpub.domain.model.ArtifactDraft): String =
+        artifact.resolveLocalPath("腾讯不支持直接 URL 发布，请切换为本地文件模式")
 
     private suspend fun fetchStoreVersion(packageName: String): String? =
         runCatching {
@@ -340,25 +335,5 @@ class TencentMarketPublisher(
             .find(text)
             ?.groupValues
             ?.get(1)
-    }
-}
-
-private fun String.fileName(): String =
-    trim().substringAfterLast('/').substringAfterLast('\\').ifBlank { "artifact.apk" }
-
-private fun MutableList<PublishTaskLog>.emit(
-    request: MarketPublishRequest,
-    log: PublishTaskLog,
-) {
-    add(log)
-    request.onLog(log)
-}
-
-private fun Long.readableBytes(): String {
-    val mb = this / (1024.0 * 1024.0)
-    return if (mb >= 1.0) {
-        "${(mb * 10).toInt() / 10.0} MB"
-    } else {
-        "${this / 1024} KB"
     }
 }
