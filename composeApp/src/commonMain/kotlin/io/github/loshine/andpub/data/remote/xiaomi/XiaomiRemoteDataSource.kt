@@ -5,8 +5,14 @@ import io.github.loshine.andpub.data.remote.signPlain
 import io.github.loshine.andpub.platform.md5Hex
 import io.github.loshine.andpub.platform.rsaPublicEncryptHex
 import io.ktor.client.HttpClient
+import io.ktor.client.request.forms.MultiPartFormDataContent
+import io.ktor.client.request.forms.formData
 import io.ktor.client.request.forms.submitForm
+import io.ktor.client.request.post
+import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
+import io.ktor.http.Headers
+import io.ktor.http.HttpHeaders
 import io.ktor.http.Parameters
 import io.ktor.http.parameters
 import org.koin.core.annotation.Single
@@ -61,6 +67,40 @@ class XiaomiRemoteDataSource(
         XiaomiOperationResult(
             message = signedPost("小米推送渠道包", "$BASE/dev/pushChannelApk", requestData, password, publicKey, extraFormFields).message,
         )
+
+    suspend fun pushAppWithFile(
+        requestData: String,
+        password: String,
+        publicKey: String,
+        apkFileName: String,
+        apkBytes: ByteArray,
+        apkMd5: String,
+    ): XiaomiOperationResult {
+        val requestDataMd5 = md5Hex(requestData)
+        val sigPayload = """{"password":"$password","sig":[{"name":"RequestData","hash":"$requestDataMd5"},{"name":"apk","hash":"$apkMd5"}]}"""
+        val sig = rsaPublicEncryptHex(publicKey, sigPayload)
+        val text = client.post("$BASE/dev/push") {
+            setBody(
+                MultiPartFormDataContent(
+                    formData {
+                        append("RequestData", requestData)
+                        append("SIG", sig)
+                        append(
+                            "apk",
+                            apkBytes,
+                            Headers.build {
+                                append(HttpHeaders.ContentDisposition, "filename=\"$apkFileName\"")
+                                append(HttpHeaders.ContentType, "application/vnd.android.package-archive")
+                            },
+                        )
+                    },
+                )
+            )
+        }.bodyAsText()
+        val response = decodeResponse<XiaomiResponse>("小米推送APK", text)
+        response.requireSuccess("小米推送APK")
+        return XiaomiOperationResult(message = response.message)
+    }
 
     private suspend fun signedPost(
         marketName: String,

@@ -5,9 +5,15 @@ import io.github.loshine.andpub.data.remote.decodeResponse
 import io.github.loshine.andpub.data.remote.signPlain
 import io.github.loshine.andpub.platform.hmacSha256Hex
 import io.ktor.client.HttpClient
+import io.ktor.client.request.forms.MultiPartFormDataContent
+import io.ktor.client.request.forms.formData
 import io.ktor.client.request.forms.submitForm
 import io.ktor.client.request.get
+import io.ktor.client.request.post
+import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
+import io.ktor.http.Headers
+import io.ktor.http.HttpHeaders
 import io.ktor.http.Parameters
 import io.ktor.http.parameters
 import org.koin.core.annotation.Single
@@ -53,12 +59,29 @@ class OppoRemoteDataSource(
 
     suspend fun uploadFile(
         uploadUrl: String,
-        formParameters: Parameters,
+        sign: String,
+        type: String,
+        fileName: String,
+        fileBytes: ByteArray,
     ): OppoUploadResult {
-        val text = client.submitForm(
-            url = uploadUrl,
-            formParameters = formParameters,
-        ).bodyAsText()
+        val text = client.post(uploadUrl) {
+            setBody(
+                MultiPartFormDataContent(
+                    formData {
+                        append("type", type)
+                        append("sign", sign)
+                        append(
+                            "file",
+                            fileBytes,
+                            Headers.build {
+                                append(HttpHeaders.ContentDisposition, "filename=\"$fileName\"")
+                                append(HttpHeaders.ContentType, "application/vnd.android.package-archive")
+                            },
+                        )
+                    },
+                )
+            )
+        }.bodyAsText()
         val response = decodeResponse<OppoResponse<OppoUploadResultData>>("OPPO上传文件", text)
         response.requireSuccess("OPPO上传文件")
         return response.data?.toOppoUploadResult() ?: error("OPPO上传文件未返回 data")

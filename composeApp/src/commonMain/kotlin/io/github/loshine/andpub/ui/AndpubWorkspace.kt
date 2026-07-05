@@ -56,8 +56,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
-import io.github.loshine.andpub.domain.market.MarketDefinitions
 import io.github.loshine.andpub.domain.market.HuaweiCredentialKeys
+import io.github.loshine.andpub.domain.market.MarketDefinitions
 import io.github.loshine.andpub.domain.market.huaweiAuthMode
 import io.github.loshine.andpub.domain.market.storageValue
 import io.github.loshine.andpub.domain.model.ArtifactDraft
@@ -78,6 +78,7 @@ import io.github.loshine.andpub.domain.model.PublishTaskLog
 import io.github.loshine.andpub.domain.model.PublishTaskRecord
 import io.github.loshine.andpub.domain.model.PublishTaskStage
 import io.github.loshine.andpub.domain.model.PublishTaskStatus
+import io.github.loshine.andpub.domain.model.isTerminal
 import io.github.loshine.andpub.domain.model.SplitApkSlot
 import io.github.loshine.andpub.domain.model.ToolSettings
 import io.github.loshine.andpub.domain.model.VivoApiEnvironment
@@ -462,6 +463,9 @@ private fun AppDetail(
                         onBack = { showPublishProcess = false },
                         onRefreshTaskStatus = { taskId ->
                             onIntent(AndpubIntent.RefreshPublishTaskStatus(taskId))
+                        },
+                        onRetryFailedTasks = {
+                            onIntent(AndpubIntent.RetryFailedPublishTasks)
                         },
                     )
                 } else {
@@ -869,13 +873,13 @@ private fun PublishTaskSection(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("当前阶段创建待提交任务，用于验证产物、状态和日志。")
+                Text("勾选渠道并填写产物后点击「开始发布」，所有选中市场并行提交。")
             }
             Button(
                 enabled = state.publishTargetChannels.isNotEmpty() && !state.isCreatingPublishTasks,
                 onClick = onCreate,
             ) {
-                Text(if (state.isCreatingPublishTasks) "创建中..." else "创建发布任务")
+                Text(if (state.isCreatingPublishTasks) "发布中..." else "开始发布")
             }
         }
 
@@ -895,10 +899,17 @@ private fun PublishProcessPage(
     state: AndpubUiState,
     onBack: () -> Unit,
     onRefreshTaskStatus: (String) -> Unit,
+    onRetryFailedTasks: () -> Unit,
 ) {
     val app = state.selectedApp ?: return
     val tasks = state.publishTasks.filter { it.appId == app.id }
     var showDetailLogs by remember(app.id) { mutableStateOf(false) }
+
+    val allTerminal = tasks.isNotEmpty() && !state.isCreatingPublishTasks &&
+            tasks.all { it.status.isTerminal() }
+    val hasFailedTasks = tasks.any { it.status == PublishTaskStatus.Failed }
+    val successCount = tasks.count { it.status == PublishTaskStatus.Submitted || it.status == PublishTaskStatus.Accepted }
+    val failedCount = tasks.count { it.status == PublishTaskStatus.Failed }
 
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(
@@ -924,6 +935,35 @@ private fun PublishProcessPage(
                     checked = showDetailLogs,
                     onCheckedChange = { showDetailLogs = it },
                 )
+            }
+        }
+
+        if (allTerminal) {
+            val summaryText = buildString {
+                if (successCount > 0) append("${successCount} 个市场已提交")
+                if (failedCount > 0) {
+                    if (successCount > 0) append("，")
+                    append("${failedCount} 个市场失败")
+                }
+            }
+            if (summaryText.isNotBlank()) {
+                Text(
+                    summaryText,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (failedCount > 0) MaterialTheme.colorScheme.error
+                    else MaterialTheme.colorScheme.primary,
+                )
+            }
+            if (hasFailedTasks) {
+                Button(
+                    onClick = onRetryFailedTasks,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.errorContainer,
+                        contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                    ),
+                ) {
+                    Text("重试失败任务（${failedCount} 个）")
+                }
             }
         }
 
@@ -1018,9 +1058,11 @@ private fun PublishProcessCard(
     }
 }
 
-private fun PublishTaskRecord.canRefreshPublishStatus(): Boolean =
-    marketType == MarketType.Vivo &&
+private fun PublishTaskRecord.canRefreshPublishStatus(): Boolean {
+    val capability = MarketDefinitions.schemaOf(marketType).capability
+    return capability.supportsPublishStatusQuery &&
             (status == PublishTaskStatus.Submitted || status == PublishTaskStatus.Accepted)
+}
 
 @Composable
 private fun PublishProcessSection(

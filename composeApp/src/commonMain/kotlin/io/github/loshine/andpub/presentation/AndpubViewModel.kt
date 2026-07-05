@@ -34,6 +34,9 @@ import io.github.loshine.andpub.domain.usecase.UpdateAndpubStateUseCase
 import io.github.loshine.andpub.domain.usecase.ValidateChannelCredentialsUseCase
 import io.github.loshine.andpub.domain.usecase.ValidatePackageNameUseCase
 import io.github.loshine.andpub.platform.saveTextFile
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -157,6 +160,7 @@ sealed interface AndpubIntent {
     ) : AndpubIntent
 
     data object CreatePublishTasks : AndpubIntent
+    data object RetryFailedPublishTasks : AndpubIntent
     data class RefreshPublishTaskStatus(val taskId: String) : AndpubIntent
 }
 
@@ -363,6 +367,7 @@ class AndpubViewModel(
             }
 
             AndpubIntent.CreatePublishTasks -> createPublishTasks()
+            AndpubIntent.RetryFailedPublishTasks -> retryFailedPublishTasks()
             is AndpubIntent.RefreshPublishTaskStatus -> refreshPublishStatus(intent.taskId)
         }
     }
@@ -729,30 +734,34 @@ class AndpubViewModel(
                         onTaskLog = ::appendPublishTaskLog,
                     )
                     replacePublishTasksForApp(app.id, tasks)
-                    tasks.map { task ->
-                        val channel = state.publishTargetChannels.firstOrNull { it.id == task.channelId }
-                        if (channel == null) {
-                            task.copy(
-                                status = PublishTaskStatus.Failed,
-                                logs = task.logs + PublishTaskLog(
-                                    level = LogLevel.Error,
-                                    message = "渠道不存在",
-                                    stage = PublishTaskStage.Result,
-                                ),
-                            ).also { updatePublishTask(it) }
-                        } else {
-                            val runningTask = task.asRunningPublishTask()
-                            if (runningTask !== task) {
-                                updatePublishTask(runningTask)
+                    coroutineScope {
+                        tasks.map { task ->
+                            async {
+                                val channel = state.publishTargetChannels.firstOrNull { it.id == task.channelId }
+                                if (channel == null) {
+                                    task.copy(
+                                        status = PublishTaskStatus.Failed,
+                                        logs = task.logs + PublishTaskLog(
+                                            level = LogLevel.Error,
+                                            message = "渠道不存在",
+                                            stage = PublishTaskStage.Result,
+                                        ),
+                                    ).also { updatePublishTask(it) }
+                                } else {
+                                    val runningTask = task.asRunningPublishTask()
+                                    if (runningTask !== task) {
+                                        updatePublishTask(runningTask)
+                                    }
+                                    executePublishTasks(
+                                        app = app,
+                                        channel = channel,
+                                        task = runningTask,
+                                        vivoOptions = vivoOptions,
+                                        onTaskLog = { log -> appendPublishTaskLog(runningTask.id, log) },
+                                    ).also { updatePublishTask(it) }
+                                }
                             }
-                            executePublishTasks(
-                                app = app,
-                                channel = channel,
-                                task = runningTask,
-                                vivoOptions = vivoOptions,
-                                onTaskLog = { log -> appendPublishTaskLog(runningTask.id, log) },
-                            ).also { updatePublishTask(it) }
-                        }
+                        }.awaitAll()
                     }
                 }.onSuccess {
                     message.value = "已创建并执行 ${it.size} 个发布任务"
@@ -777,6 +786,66 @@ class AndpubViewModel(
                 }
             } finally {
                 vivoProductionConfirmed.value = false
+                isCreatingPublishTasks.value = false
+            }
+        }
+    }
+
+    private fun retryFailedPublishTasks() {
+        val state = uiState.value
+        val app = state.selectedApp ?: return
+        val failedTasks = state.publishTasks.filter {
+            it.appId == app.id && it.status == PublishTaskStatus.Failed
+        }
+        if (failedTasks.isEmpty()) {
+            message.value = "没有需要重试的失败任务"
+            return
+        }
+
+        val vivoOptions = state.snapshot.vivoPublishOptions.copy(
+            productionConfirmed = state.vivoProductionConfirmed,
+        )
+
+        viewModelScope.launch {
+            isCreatingPublishTasks.value = true
+            message.value = "正在重试 ${failedTasks.size} 个失败任务..."
+            try {
+                coroutineScope {
+                    failedTasks.map { task ->
+                        async {
+                            val channel = state.publishTargetChannels.firstOrNull { it.id == task.channelId }
+                            if (channel == null) {
+                                task.copy(
+                                    status = PublishTaskStatus.Failed,
+                                    logs = task.logs + PublishTaskLog(
+                                        level = LogLevel.Error,
+                                        message = "渠道不存在，无法重试",
+                                        stage = PublishTaskStage.Result,
+                                    ),
+                                ).also { updatePublishTask(it) }
+                            } else {
+                                val resetTask = task.copy(
+                                    status = PublishTaskStatus.Ready,
+                                    logs = emptyList(),
+                                    vendorTaskId = null,
+                                    vendorUploadIds = emptyList(),
+                                    publishEnvironment = null,
+                                )
+                                val runningTask = resetTask.asRunningPublishTask()
+                                updatePublishTask(runningTask)
+                                executePublishTasks(
+                                    app = app,
+                                    channel = channel,
+                                    task = runningTask,
+                                    vivoOptions = vivoOptions,
+                                    onTaskLog = { log -> appendPublishTaskLog(runningTask.id, log) },
+                                ).also { updatePublishTask(it) }
+                            }
+                        }
+                    }.awaitAll()
+                }
+                message.value = "重试完成"
+            } finally {
                 isCreatingPublishTasks.value = false
             }
         }
@@ -871,14 +940,12 @@ class AndpubViewModel(
     }
 
     private fun PublishTaskRecord.asRunningPublishTask(): PublishTaskRecord {
-        if (status != PublishTaskStatus.Ready || marketType != MarketType.Vivo) {
-            return this
-        }
+        if (status != PublishTaskStatus.Ready) return this
         return copy(
             status = PublishTaskStatus.Uploading,
             logs = logs + PublishTaskLog(
                 level = LogLevel.Info,
-                message = "开始执行 vivo 发布",
+                message = "开始执行 ${marketType.displayName} 发布",
                 stage = PublishTaskStage.Upload,
             ),
         )

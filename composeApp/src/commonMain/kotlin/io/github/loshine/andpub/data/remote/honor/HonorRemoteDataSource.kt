@@ -3,6 +3,8 @@ package io.github.loshine.andpub.data.remote.honor
 import io.github.loshine.andpub.data.remote.decodeResponse
 import io.ktor.client.HttpClient
 import io.ktor.client.request.HttpRequestBuilder
+import io.ktor.client.request.forms.MultiPartFormDataContent
+import io.ktor.client.request.forms.formData
 import io.ktor.client.request.forms.submitForm
 import io.ktor.client.request.get
 import io.ktor.client.request.header
@@ -10,6 +12,8 @@ import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
+import io.ktor.http.Headers
+import io.ktor.http.HttpHeaders
 import io.ktor.http.Parameters
 import io.ktor.http.contentType
 import io.ktor.http.parameters
@@ -94,19 +98,31 @@ class HonorRemoteDataSource(
         token: String,
         appId: String,
         objectId: String,
-        formParameters: Parameters,
+        fileName: String,
+        fileBytes: ByteArray,
     ): HonorOperationResult {
-        val text = client.submitForm(
-            url = "$PUBLISH_BASE/file-upload",
-            formParameters = formParameters,
-        ) {
+        val response = client.post("$PUBLISH_BASE/file-upload") {
             honorHeaders(token)
             url {
                 parameters.append("appId", appId)
                 parameters.append("objectId", objectId)
             }
-        }.bodyAsText()
-        return decodeResponse<HonorResponse<Unit>>("荣耀上传文件", text).toHonorOperationResult("荣耀上传文件")
+            setBody(
+                MultiPartFormDataContent(
+                    formData {
+                        append(
+                            "file",
+                            fileBytes,
+                            Headers.build {
+                                append(HttpHeaders.ContentDisposition, "filename=\"$fileName\"")
+                                append(HttpHeaders.ContentType, "application/vnd.android.package-archive")
+                            },
+                        )
+                    },
+                )
+            )
+        }
+        return response.decodeResponse<HonorResponse<Unit>>("荣耀上传文件").toHonorOperationResult("荣耀上传文件")
     }
 
     suspend fun uploadByUrl(

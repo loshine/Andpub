@@ -7,6 +7,8 @@ import io.github.loshine.andpub.platform.hmacSha256Hex
 import io.ktor.client.HttpClient
 import io.ktor.client.request.forms.submitForm
 import io.ktor.client.request.get
+import io.ktor.client.request.put
+import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.Parameters
 import org.koin.core.annotation.Single
@@ -92,6 +94,19 @@ class TencentRemoteDataSource(
             auditStatus = response.auditStatus,
             message = response.message,
         )
+    }
+
+    suspend fun uploadToPresignedUrl(
+        presignedUrl: String,
+        fileBytes: ByteArray,
+    ) {
+        val response = client.put(presignedUrl) {
+            setBody(fileBytes)
+        }
+        val status = response.status.value
+        require(status in 200..299) {
+            "腾讯 COS 上传失败，HTTP $status：${response.bodyAsText().take(200)}"
+        }
     }
 
     suspend fun getStorePage(packageName: String): String =

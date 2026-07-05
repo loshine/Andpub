@@ -80,6 +80,16 @@ enum class PublishTaskStatus(val displayName: String) {
     Failed("失败"),
 }
 
+fun PublishTaskStatus.isTerminal(): Boolean = when (this) {
+    PublishTaskStatus.Submitted,
+    PublishTaskStatus.Accepted,
+    PublishTaskStatus.Failed,
+    PublishTaskStatus.Ready -> true
+    PublishTaskStatus.Created,
+    PublishTaskStatus.Validating,
+    PublishTaskStatus.Uploading -> false
+}
+
 @Serializable
 enum class PublishTaskStage(val displayName: String) {
     Download("下载"),
