@@ -2,8 +2,8 @@ package io.github.loshine.andpub.ui
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -15,7 +15,6 @@ import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.FileDownload
 import androidx.compose.material.icons.outlined.FileUpload
-import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -28,7 +27,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LargeTopAppBar
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -44,11 +42,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.unit.dp
 import io.github.loshine.andpub.domain.model.AppRecord
+import io.github.loshine.andpub.domain.usecase.ValidatePackageNameUseCase
 import io.github.loshine.andpub.presentation.AndpubIntent
 import io.github.loshine.andpub.presentation.AndpubUiState
 import io.github.loshine.andpub.ui.components.EmptyState
 
 internal const val NEW_APP_DIALOG_ID = "new-app"
+
+private val packageNameValidator = ValidatePackageNameUseCase()
 
 // ─── Mobile list screen ────────────────────────────────────────────────────────
 
@@ -62,9 +63,8 @@ internal fun AppListScreen(
 ) {
     var appDialogId by remember { mutableStateOf<String?>(null) }
     var deletingAppId by remember { mutableStateOf<String?>(null) }
-    val editingApp = state.apps.firstOrNull { it.id == appDialogId }
-    val deletingApp = state.apps.firstOrNull { it.id == deletingAppId }
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior(rememberTopAppBarState())
+    val importExportBusy = state.busy.importing || state.busy.exporting
 
     Scaffold(
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
@@ -83,12 +83,13 @@ internal fun AppListScreen(
                 actions = {
                     IconButton(
                         onClick = { onIntent(AndpubIntent.ImportAppSettings) },
+                        enabled = !importExportBusy,
                     ) {
                         Icon(Icons.Outlined.FileDownload, contentDescription = "导入应用设置")
                     }
                     IconButton(
                         onClick = { onIntent(AndpubIntent.ExportSelectedAppSettings) },
-                        enabled = state.selectedApp != null,
+                        enabled = state.selectedApp != null && !importExportBusy,
                     ) {
                         Icon(Icons.Outlined.FileUpload, contentDescription = "导出当前应用设置")
                     }
@@ -106,7 +107,9 @@ internal fun AppListScreen(
             EmptyState(
                 icon = Icons.Outlined.Add,
                 title = "还没有应用",
-                description = "点击右下角的 + 按钮新建第一个应用",
+                description = "创建第一个应用，开始配置渠道与发包",
+                actionLabel = "创建应用",
+                onAction = { appDialogId = NEW_APP_DIALOG_ID },
                 modifier = Modifier
                     .padding(padding)
                     .fillMaxSize(),
@@ -116,7 +119,7 @@ internal fun AppListScreen(
                 modifier = Modifier
                     .padding(padding)
                     .fillMaxSize(),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                contentPadding = PaddingValues(
                     start = 16.dp,
                     end = 16.dp,
                     top = 8.dp,
@@ -129,14 +132,8 @@ internal fun AppListScreen(
                         app = app,
                         selected = state.selectedAppId == app.id,
                         onClick = { onAppSelected(app.id) },
-                        onEdit = {
-                            onAppSelected(app.id)
-                            appDialogId = app.id
-                        },
-                        onDelete = {
-                            onAppSelected(app.id)
-                            deletingAppId = app.id
-                        },
+                        onEdit = { appDialogId = app.id },
+                        onDelete = { deletingAppId = app.id },
                         channelCount = state.channels.count { it.appId == app.id },
                     )
                 }
@@ -144,34 +141,14 @@ internal fun AppListScreen(
         }
     }
 
-    if (appDialogId != null) {
-        AppEditorDialog(
-            appId = editingApp?.id,
-            initialName = editingApp?.name.orEmpty(),
-            initialPackageName = editingApp?.packageName.orEmpty(),
-            onDismiss = { appDialogId = null },
-            onSave = { name, packageName ->
-                if (editingApp == null) {
-                    onIntent(AndpubIntent.CreateApp(name, packageName))
-                } else {
-                    onIntent(AndpubIntent.UpdateApp(editingApp.id, name, packageName))
-                }
-                appDialogId = null
-            },
-        )
-    }
-
-    deletingApp?.let { app ->
-        ConfirmDeleteDialog(
-            title = "删除应用",
-            message = "删除 ${app.name} 会同时删除它的渠道、产物草稿和发布任务。",
-            onDismiss = { deletingAppId = null },
-            onConfirm = {
-                onIntent(AndpubIntent.DeleteApp(app.id))
-                deletingAppId = null
-            },
-        )
-    }
+    AppCrudDialogs(
+        state = state,
+        appDialogId = appDialogId,
+        deletingAppId = deletingAppId,
+        onDismissEditor = { appDialogId = null },
+        onDismissDelete = { deletingAppId = null },
+        onIntent = onIntent,
+    )
 }
 
 // ─── Desktop sidebar ───────────────────────────────────────────────────────────
@@ -185,8 +162,7 @@ internal fun AppSidebar(
 ) {
     var appDialogId by remember { mutableStateOf<String?>(null) }
     var deletingAppId by remember { mutableStateOf<String?>(null) }
-    val editingApp = state.apps.firstOrNull { it.id == appDialogId }
-    val deletingApp = state.apps.firstOrNull { it.id == deletingAppId }
+    val importExportBusy = state.busy.importing || state.busy.exporting
 
     Column(
         modifier = modifier.padding(16.dp),
@@ -201,23 +177,22 @@ internal fun AppSidebar(
             )
         }
 
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(
-                onClick = { appDialogId = NEW_APP_DIALOG_ID },
-                modifier = Modifier.weight(1f),
-            ) {
-                Icon(
-                    Icons.Outlined.Add,
-                    contentDescription = null,
-                    modifier = Modifier.padding(end = 4.dp),
-                )
-                Text("创建应用")
-            }
+        Button(
+            onClick = { appDialogId = NEW_APP_DIALOG_ID },
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Icon(
+                Icons.Outlined.Add,
+                contentDescription = null,
+                modifier = Modifier.padding(end = 4.dp),
+            )
+            Text("创建应用")
         }
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(
                 onClick = { onIntent(AndpubIntent.ImportAppSettings) },
+                enabled = !importExportBusy,
                 modifier = Modifier.weight(1f),
             ) {
                 Icon(
@@ -225,11 +200,11 @@ internal fun AppSidebar(
                     contentDescription = null,
                     modifier = Modifier.padding(end = 4.dp),
                 )
-                Text("导入")
+                Text(if (state.busy.importing) "导入中" else "导入")
             }
             OutlinedButton(
                 onClick = { onIntent(AndpubIntent.ExportSelectedAppSettings) },
-                enabled = state.selectedApp != null,
+                enabled = state.selectedApp != null && !importExportBusy,
                 modifier = Modifier.weight(1f),
             ) {
                 Icon(
@@ -237,17 +212,20 @@ internal fun AppSidebar(
                     contentDescription = null,
                     modifier = Modifier.padding(end = 4.dp),
                 )
-                Text("导出")
+                Text(if (state.busy.exporting) "导出中" else "导出")
             }
         }
 
         Text("应用列表", style = MaterialTheme.typography.titleSmall)
 
         if (state.apps.isEmpty()) {
-            Text(
-                "点击「创建应用」开始",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            EmptyState(
+                icon = Icons.Outlined.Add,
+                title = "暂无应用",
+                description = "点击上方按钮创建第一个应用",
+                actionLabel = "创建应用",
+                onAction = { appDialogId = NEW_APP_DIALOG_ID },
+                modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp),
             )
         }
 
@@ -260,18 +238,42 @@ internal fun AppSidebar(
                     app = app,
                     selected = state.selectedAppId == app.id,
                     onClick = { onIntent(AndpubIntent.SelectApp(app.id)) },
-                    onEdit = {
-                        onIntent(AndpubIntent.SelectApp(app.id))
-                        appDialogId = app.id
-                    },
-                    onDelete = {
-                        onIntent(AndpubIntent.SelectApp(app.id))
-                        deletingAppId = app.id
-                    },
+                    onEdit = { appDialogId = app.id },
+                    onDelete = { deletingAppId = app.id },
                     channelCount = state.channels.count { it.appId == app.id },
                 )
             }
         }
+    }
+
+    AppCrudDialogs(
+        state = state,
+        appDialogId = appDialogId,
+        deletingAppId = deletingAppId,
+        onDismissEditor = { appDialogId = null },
+        onDismissDelete = { deletingAppId = null },
+        onIntent = onIntent,
+    )
+}
+
+// ─── Shared CRUD dialogs ───────────────────────────────────────────────────────
+
+@Composable
+private fun AppCrudDialogs(
+    state: AndpubUiState,
+    appDialogId: String?,
+    deletingAppId: String?,
+    onDismissEditor: () -> Unit,
+    onDismissDelete: () -> Unit,
+    onIntent: (AndpubIntent) -> Unit,
+) {
+    val editingApp = state.apps.firstOrNull { it.id == appDialogId }
+    val deletingApp = state.apps.firstOrNull { it.id == deletingAppId }
+    val existingPackages = remember(state.apps, editingApp?.id) {
+        state.apps
+            .filter { it.id != editingApp?.id }
+            .map { it.packageName }
+            .toSet()
     }
 
     if (appDialogId != null) {
@@ -279,14 +281,15 @@ internal fun AppSidebar(
             appId = editingApp?.id,
             initialName = editingApp?.name.orEmpty(),
             initialPackageName = editingApp?.packageName.orEmpty(),
-            onDismiss = { appDialogId = null },
+            existingPackageNames = existingPackages,
+            onDismiss = onDismissEditor,
             onSave = { name, packageName ->
                 if (editingApp == null) {
                     onIntent(AndpubIntent.CreateApp(name, packageName))
                 } else {
                     onIntent(AndpubIntent.UpdateApp(editingApp.id, name, packageName))
                 }
-                appDialogId = null
+                onDismissEditor()
             },
         )
     }
@@ -295,10 +298,10 @@ internal fun AppSidebar(
         ConfirmDeleteDialog(
             title = "删除应用",
             message = "删除 ${app.name} 会同时删除它的渠道、产物草稿和发布任务。",
-            onDismiss = { deletingAppId = null },
+            onDismiss = onDismissDelete,
             onConfirm = {
                 onIntent(AndpubIntent.DeleteApp(app.id))
-                deletingAppId = null
+                onDismissDelete()
             },
         )
     }
@@ -377,11 +380,24 @@ internal fun AppEditorDialog(
     appId: String?,
     initialName: String,
     initialPackageName: String,
+    existingPackageNames: Set<String> = emptySet(),
     onDismiss: () -> Unit,
     onSave: (String, String) -> Unit,
 ) {
     var appName by remember(appId) { mutableStateOf(initialName) }
     var packageName by remember(appId) { mutableStateOf(initialPackageName) }
+
+    val nameError = when {
+        appName.isBlank() -> "应用名必填"
+        else -> null
+    }
+    val packageError = when {
+        packageName.isBlank() -> "包名必填"
+        !packageNameValidator(packageName.trim()) -> "包名格式不正确（如 com.example.app）"
+        packageName.trim() in existingPackageNames -> "该包名已经存在"
+        else -> null
+    }
+    val canSave = nameError == null && packageError == null
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -393,6 +409,10 @@ internal fun AppEditorDialog(
                     onValueChange = { appName = it },
                     label = { Text("应用名") },
                     singleLine = true,
+                    isError = appName.isNotEmpty() && nameError != null,
+                    supportingText = {
+                        if (appName.isNotEmpty() && nameError != null) Text(nameError)
+                    },
                     modifier = Modifier.fillMaxWidth(),
                 )
                 OutlinedTextField(
@@ -400,14 +420,21 @@ internal fun AppEditorDialog(
                     onValueChange = { packageName = it },
                     label = { Text("包名") },
                     singleLine = true,
+                    isError = packageName.isNotEmpty() && packageError != null,
+                    supportingText = {
+                        when {
+                            packageName.isNotEmpty() && packageError != null -> Text(packageError)
+                            else -> Text("至少两段，每段以字母开头")
+                        }
+                    },
                     modifier = Modifier.fillMaxWidth(),
                 )
             }
         },
         confirmButton = {
             Button(
-                onClick = { onSave(appName, packageName) },
-                enabled = appName.isNotBlank() && packageName.isNotBlank(),
+                onClick = { onSave(appName.trim(), packageName.trim()) },
+                enabled = canSave,
             ) {
                 Text("保存")
             }

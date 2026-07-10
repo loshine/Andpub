@@ -24,6 +24,7 @@ import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -31,6 +32,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import io.github.loshine.andpub.domain.usecase.ValidateChannelCredentialsUseCase
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -118,8 +120,18 @@ fun ChannelSummaryCard(
                     }
                 }
                 Row(verticalAlignment = Alignment.Top) {
-                    IconButton(onClick = onSync) {
-                        Icon(Icons.Outlined.Refresh, contentDescription = "获取应用信息")
+                    IconButton(
+                        onClick = onSync,
+                        enabled = channel.syncStatus != ChannelSyncStatus.Syncing,
+                    ) {
+                        if (channel.syncStatus == ChannelSyncStatus.Syncing) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                strokeWidth = 2.dp,
+                            )
+                        } else {
+                            Icon(Icons.Outlined.Refresh, contentDescription = "获取应用信息")
+                        }
                     }
                     IconButton(onClick = onToggleExpanded) {
                         Icon(
@@ -334,6 +346,12 @@ fun ChannelEditorDialog(
     val testKey = channel?.id
         ?: "new-${marketType.name}-${if (marketType == MarketType.Huawei) huaweiAuthMode.name else "default"}"
     val testState = state.channelTests[testKey]
+    val resolvedCredentials = credentials.toChannelCredentials(
+        marketType, schema.credentialFields, huaweiAuthMode, serviceAccountInputMode,
+    )
+    val credentialError = ValidateChannelCredentialsUseCase()(marketType, resolvedCredentials)
+    val isTesting = testState?.isLoading == true
+    val canSave = credentialError == null && !isTesting
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -407,26 +425,47 @@ fun ChannelEditorDialog(
                     }
                 }
 
-                if (testState?.info != null || testState?.error != null) {
-                    ConnectionTestResult(
-                        marketType = marketType,
-                        info = testState.info,
-                        error = testState.error,
+                if (credentialError != null) {
+                    Text(
+                        credentialError,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
                     )
+                }
+
+                when {
+                    isTesting -> {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp,
+                            )
+                            Text("正在测试连接…", style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                    testState?.info != null || testState?.error != null -> {
+                        ConnectionTestResult(
+                            marketType = marketType,
+                            info = testState.info,
+                            error = testState.error,
+                        )
+                    }
                 }
             }
         },
         confirmButton = {
             Button(
+                enabled = canSave,
                 onClick = {
                     onSave(
                         channel?.id,
                         channelName,
                         marketType,
                         marketAppId,
-                        credentials.toChannelCredentials(
-                            marketType, schema.credentialFields, huaweiAuthMode, serviceAccountInputMode
-                        ),
+                        resolvedCredentials,
                         channel.extraFieldsFor(marketType, vivoEnvironment),
                     )
                 },
@@ -435,19 +474,18 @@ fun ChannelEditorDialog(
         dismissButton = {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(
+                    enabled = !isTesting && credentialError == null,
                     onClick = {
                         onTest(
                             testKey,
                             marketType,
                             marketAppId,
-                            credentials.toChannelCredentials(
-                                marketType, schema.credentialFields, huaweiAuthMode, serviceAccountInputMode
-                            ),
+                            resolvedCredentials,
                             channel.extraFieldsFor(marketType, vivoEnvironment),
                         )
                     },
                 ) {
-                    Text(if (testState?.isLoading == true) "测试中…" else "测试连接")
+                    Text(if (isTesting) "测试中…" else "测试连接")
                 }
                 OutlinedButton(onClick = onDismiss) { Text("取消") }
             }

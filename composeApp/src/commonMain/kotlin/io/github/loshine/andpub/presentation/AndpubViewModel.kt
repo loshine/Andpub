@@ -56,13 +56,29 @@ data class ChannelTestUiState(
     val error: String? = null,
 )
 
+data class UiMessage(
+    val id: Long,
+    val text: String,
+    val isError: Boolean = false,
+)
+
+data class BusyFlags(
+    val importing: Boolean = false,
+    val exporting: Boolean = false,
+    val syncingAll: Boolean = false,
+) {
+    val anyBusy: Boolean get() = importing || exporting || syncingAll
+}
+
 data class AndpubUiState(
     val snapshot: LocalStateSnapshot = LocalStateSnapshot(),
-    val message: String? = null,
+    val uiMessage: UiMessage? = null,
+    val busy: BusyFlags = BusyFlags(),
     val isCreatingPublishTasks: Boolean = false,
     val vivoProductionConfirmed: Boolean = false,
     val channelTests: Map<String, ChannelTestUiState> = emptyMap(),
 ) {
+    val message: String? get() = uiMessage?.text
     val apps: List<AppRecord> = snapshot.apps
     val channels: List<ChannelRecord> = snapshot.channels
     val publishTasks: List<PublishTaskRecord> = snapshot.publishTasks
@@ -168,6 +184,8 @@ sealed interface AndpubIntent {
     data object CreatePublishTasks : AndpubIntent
     data object RetryFailedPublishTasks : AndpubIntent
     data class RefreshPublishTaskStatus(val taskId: String) : AndpubIntent
+    /** Clears the current snackbar only when [messageId] still matches. */
+    data class DismissMessage(val messageId: Long) : AndpubIntent
 }
 
 @KoinViewModel
@@ -185,24 +203,35 @@ class AndpubViewModel(
 ) : ViewModel() {
     private val observeState = ObserveAndpubStateUseCase(repository)
     private val updateState = UpdateAndpubStateUseCase(repository)
-    private val message = MutableStateFlow<String?>(null)
+    private val message = MutableStateFlow<UiMessage?>(null)
+    private var messageSeq = 0L
+    private val busyFlags = MutableStateFlow(BusyFlags())
     private val isCreatingPublishTasks = MutableStateFlow(false)
     private val vivoProductionConfirmed = MutableStateFlow(false)
     private val channelTests = MutableStateFlow<Map<String, ChannelTestUiState>>(emptyMap())
 
+    private data class EphemeralUi(
+        val message: UiMessage? = null,
+        val busy: BusyFlags = BusyFlags(),
+        val isCreatingPublishTasks: Boolean = false,
+        val vivoProductionConfirmed: Boolean = false,
+        val channelTests: Map<String, ChannelTestUiState> = emptyMap(),
+    )
+
     val uiState: StateFlow<AndpubUiState> = combine(
         observeState(),
-        message,
-        isCreatingPublishTasks,
-        vivoProductionConfirmed,
-        channelTests,
-    ) { snapshot, currentMessage, creatingTasks, productionConfirmed, tests ->
+        combine(message, busyFlags, isCreatingPublishTasks, vivoProductionConfirmed, channelTests) {
+                currentMessage, busy, creatingTasks, productionConfirmed, tests ->
+            EphemeralUi(currentMessage, busy, creatingTasks, productionConfirmed, tests)
+        },
+    ) { snapshot, ephemeral ->
         AndpubUiState(
             snapshot = snapshot.ensureSelectedApp().withoutPersistedVivoProductionConfirmation(),
-            message = currentMessage,
-            isCreatingPublishTasks = creatingTasks,
-            vivoProductionConfirmed = productionConfirmed,
-            channelTests = tests,
+            uiMessage = ephemeral.message,
+            busy = ephemeral.busy,
+            isCreatingPublishTasks = ephemeral.isCreatingPublishTasks,
+            vivoProductionConfirmed = ephemeral.vivoProductionConfirmed,
+            channelTests = ephemeral.channelTests,
         )
     }.stateIn(
         scope = viewModelScope,
@@ -265,25 +294,32 @@ class AndpubViewModel(
             is AndpubIntent.ApplyInspectionToUnified -> {
                 clearVivoProductionConfirmation()
                 reduce {
-                    it.copy(
-                        unifiedArtifact = it.unifiedArtifact.withInspection(
-                            intent.path,
-                            intent.inspection
+                    // Drop stale results if the user already selected another path.
+                    if (it.unifiedArtifact.isStaleInspection(intent.path)) it
+                    else {
+                        it.copy(
+                            unifiedArtifact = it.unifiedArtifact.withInspection(
+                                intent.path,
+                                intent.inspection,
+                            ),
                         )
-                    )
+                    }
                 }
             }
 
             is AndpubIntent.ApplySplitInspectionToUnified -> {
                 clearVivoProductionConfirmation()
                 reduce {
-                    it.copy(
-                        unifiedArtifact = it.unifiedArtifact.withSplitInspection(
-                            intent.slot,
-                            intent.path,
-                            intent.inspection,
+                    if (it.unifiedArtifact.isStaleSplitInspection(intent.slot, intent.path)) it
+                    else {
+                        it.copy(
+                            unifiedArtifact = it.unifiedArtifact.withSplitInspection(
+                                intent.slot,
+                                intent.path,
+                                intent.inspection,
+                            ),
                         )
-                    )
+                    }
                 }
             }
 
@@ -291,14 +327,17 @@ class AndpubViewModel(
                 clearVivoProductionConfirmation()
                 reduce {
                     val current = it.channelArtifacts[intent.channelId] ?: ArtifactDraft()
-                    it.copy(
-                        channelArtifacts = it.channelArtifacts + (
-                            intent.channelId to current.withInspection(
-                                intent.path,
-                                intent.inspection
-                            )
+                    if (current.isStaleInspection(intent.path)) it
+                    else {
+                        it.copy(
+                            channelArtifacts = it.channelArtifacts + (
+                                intent.channelId to current.withInspection(
+                                    intent.path,
+                                    intent.inspection,
+                                )
+                            ),
                         )
-                    )
+                    }
                 }
             }
 
@@ -306,40 +345,49 @@ class AndpubViewModel(
                 clearVivoProductionConfirmation()
                 reduce {
                     val current = it.channelArtifacts[intent.channelId] ?: ArtifactDraft()
-                    it.copy(
-                        channelArtifacts = it.channelArtifacts + (
-                            intent.channelId to current.withSplitInspection(
-                                intent.slot,
-                                intent.path,
-                                intent.inspection
-                            )
+                    if (current.isStaleSplitInspection(intent.slot, intent.path)) it
+                    else {
+                        it.copy(
+                            channelArtifacts = it.channelArtifacts + (
+                                intent.channelId to current.withSplitInspection(
+                                    intent.slot,
+                                    intent.path,
+                                    intent.inspection,
+                                )
+                            ),
                         )
-                    )
+                    }
                 }
             }
 
             is AndpubIntent.ApplyArtifactErrorToUnified -> {
                 clearVivoProductionConfirmation()
                 reduce {
-                    it.copy(
-                        unifiedArtifact = it.unifiedArtifact.copy(
-                            value = intent.path,
-                            message = intent.error.message ?: "产物解析失败",
+                    if (it.unifiedArtifact.isStaleInspection(intent.path)) it
+                    else {
+                        it.copy(
+                            unifiedArtifact = it.unifiedArtifact.copy(
+                                value = intent.path,
+                                message = intent.error.message ?: "产物解析失败",
+                            ),
                         )
-                    )
+                    }
                 }
             }
 
             is AndpubIntent.ApplySplitArtifactErrorToUnified -> {
                 clearVivoProductionConfirmation()
                 reduce {
-                    it.copy(
-                        unifiedArtifact = it.unifiedArtifact.withSplitError(
-                            intent.slot,
-                            intent.path,
-                            intent.error
+                    if (it.unifiedArtifact.isStaleSplitInspection(intent.slot, intent.path)) it
+                    else {
+                        it.copy(
+                            unifiedArtifact = it.unifiedArtifact.withSplitError(
+                                intent.slot,
+                                intent.path,
+                                intent.error,
+                            ),
                         )
-                    )
+                    }
                 }
             }
 
@@ -347,14 +395,17 @@ class AndpubViewModel(
                 clearVivoProductionConfirmation()
                 reduce {
                     val current = it.channelArtifacts[intent.channelId] ?: ArtifactDraft()
-                    it.copy(
-                        channelArtifacts = it.channelArtifacts + (
-                            intent.channelId to current.copy(
-                                value = intent.path,
-                                message = intent.error.message ?: "产物解析失败",
-                            )
+                    if (current.isStaleInspection(intent.path)) it
+                    else {
+                        it.copy(
+                            channelArtifacts = it.channelArtifacts + (
+                                intent.channelId to current.copy(
+                                    value = intent.path,
+                                    message = intent.error.message ?: "产物解析失败",
+                                )
+                            ),
                         )
-                    )
+                    }
                 }
             }
 
@@ -362,22 +413,49 @@ class AndpubViewModel(
                 clearVivoProductionConfirmation()
                 reduce {
                     val current = it.channelArtifacts[intent.channelId] ?: ArtifactDraft()
-                    it.copy(
-                        channelArtifacts = it.channelArtifacts + (
-                            intent.channelId to current.withSplitError(
-                                intent.slot,
-                                intent.path,
-                                intent.error
-                            )
+                    if (current.isStaleSplitInspection(intent.slot, intent.path)) it
+                    else {
+                        it.copy(
+                            channelArtifacts = it.channelArtifacts + (
+                                intent.channelId to current.withSplitError(
+                                    intent.slot,
+                                    intent.path,
+                                    intent.error,
+                                )
+                            ),
                         )
-                    )
+                    }
                 }
             }
 
             AndpubIntent.CreatePublishTasks -> createPublishTasks()
             AndpubIntent.RetryFailedPublishTasks -> retryFailedPublishTasks()
             is AndpubIntent.RefreshPublishTaskStatus -> refreshPublishStatus(intent.taskId)
+            is AndpubIntent.DismissMessage -> {
+                if (message.value?.id == intent.messageId) {
+                    message.value = null
+                }
+            }
         }
+    }
+
+    private fun postMessage(text: String, isError: Boolean = false) {
+        message.value = UiMessage(id = ++messageSeq, text = text, isError = isError)
+    }
+
+    /**
+     * Stale when the draft already points at a *different* non-empty path
+     * (user moved on). Matching path or empty path (commit still in flight) is accepted.
+     */
+    private fun ArtifactDraft.isStaleInspection(path: String): Boolean =
+        value.isNotBlank() && value != path
+
+    private fun ArtifactDraft.isStaleSplitInspection(slot: SplitApkSlot, path: String): Boolean {
+        val current = when (slot) {
+            SplitApkSlot.Arm32 -> split32.value
+            SplitApkSlot.Arm64 -> split64.value
+        }
+        return current.isNotBlank() && current != path
     }
 
     private fun createApp(name: String, packageName: String) {
@@ -386,15 +464,15 @@ class AndpubViewModel(
         val snapshot = uiState.value.snapshot
         when {
             cleanName.isEmpty() || cleanPackageName.isEmpty() -> {
-                message.value = "应用名和包名必填"
+                postMessage("应用名和包名必填", isError = true)
             }
 
             !validatePackageName(cleanPackageName) -> {
-                message.value = "包名格式不正确"
+                postMessage("包名格式不正确", isError = true)
             }
 
             snapshot.apps.any { it.packageName == cleanPackageName } -> {
-                message.value = "该包名已经存在"
+                postMessage("该包名已经存在", isError = true)
             }
 
             else -> reduce("已添加应用") {
@@ -417,19 +495,19 @@ class AndpubViewModel(
         val snapshot = uiState.value.snapshot
         when {
             cleanName.isEmpty() || cleanPackageName.isEmpty() -> {
-                message.value = "应用名和包名必填"
+                postMessage("应用名和包名必填", isError = true)
             }
 
             !validatePackageName(cleanPackageName) -> {
-                message.value = "包名格式不正确"
+                postMessage("包名格式不正确", isError = true)
             }
 
             snapshot.apps.none { it.id == appId } -> {
-                message.value = "应用不存在"
+                postMessage("应用不存在", isError = true)
             }
 
             snapshot.apps.any { it.id != appId && it.packageName == cleanPackageName } -> {
-                message.value = "该包名已经存在"
+                postMessage("该包名已经存在", isError = true)
             }
 
             else -> reduce("已更新应用") {
@@ -450,7 +528,7 @@ class AndpubViewModel(
         val snapshot = uiState.value.snapshot
         val app = snapshot.apps.firstOrNull { it.id == appId }
         if (app == null) {
-            message.value = "应用不存在"
+            postMessage("应用不存在", isError = true)
             return
         }
 
@@ -475,72 +553,86 @@ class AndpubViewModel(
         val state = uiState.value
         val app = state.selectedApp
         if (app == null) {
-            message.value = "请先选择应用"
+            postMessage("请先选择应用", isError = true)
             return
         }
         viewModelScope.launch {
-            runCatching {
-                saveTextFile(
-                    defaultFileName = buildAppSettingsExport.defaultFileName(app),
-                    content = buildAppSettingsExport(app, state.selectedChannels),
+            busyFlags.value = busyFlags.value.copy(exporting = true)
+            try {
+                runCatching {
+                    saveTextFile(
+                        defaultFileName = buildAppSettingsExport.defaultFileName(app),
+                        content = buildAppSettingsExport(app, state.selectedChannels),
+                    )
+                }.fold(
+                    onSuccess = { path ->
+                        if (path == null) postMessage("已取消导出")
+                        else postMessage("已导出应用设置：$path")
+                    },
+                    onFailure = {
+                        postMessage("导出应用设置失败：${it.message ?: "未知错误"}", isError = true)
+                    },
                 )
-            }.fold(
-                onSuccess = { path ->
-                    message.value = path?.let { "已导出应用设置：$it" } ?: "已取消导出"
-                },
-                onFailure = {
-                    message.value = "导出应用设置失败：${it.message ?: "未知错误"}"
-                },
-            )
+            } finally {
+                busyFlags.value = busyFlags.value.copy(exporting = false)
+            }
         }
     }
 
     private fun importAppSettings() {
         viewModelScope.launch {
-            runCatching { openTextFile("导入应用设置") }
-                .onFailure {
-                    message.value = "打开文件失败：${it.message ?: "未知错误"}"
-                    return@launch
-                }
-                .onSuccess { json ->
-                    if (json == null) {
-                        message.value = "已取消导入"
+            busyFlags.value = busyFlags.value.copy(importing = true)
+            try {
+                runCatching { openTextFile("导入应用设置") }
+                    .onFailure {
+                        postMessage("打开文件失败：${it.message ?: "未知错误"}", isError = true)
                         return@launch
                     }
-                    val snapshot = uiState.value.snapshot
-                    importAppSettingsUseCase(json, snapshot)
-                        .onSuccess { result ->
-                            reduce {
-                                var s = it
-                                val existingApp = s.apps.firstOrNull { a -> a.id == result.app.id }
-                                if (existingApp == null) {
+                    .onSuccess { json ->
+                        if (json == null) {
+                            postMessage("已取消导入")
+                            return@launch
+                        }
+                        val snapshot = uiState.value.snapshot
+                        importAppSettingsUseCase(json, snapshot)
+                            .onSuccess { result ->
+                                reduce {
+                                    var s = it
+                                    val existingApp = s.apps.firstOrNull { a -> a.id == result.app.id }
+                                    if (existingApp == null) {
+                                        s = s.copy(
+                                            apps = s.apps + result.app,
+                                            selectedAppId = result.app.id,
+                                        )
+                                    }
                                     s = s.copy(
-                                        apps = s.apps + result.app,
-                                        selectedAppId = result.app.id,
+                                        channels = s.channels + result.channels,
+                                        channelArtifacts = s.channelArtifacts +
+                                                result.channels.associate { ch -> ch.id to ArtifactDraft() },
                                     )
+                                    s
                                 }
-                                s = s.copy(
-                                    channels = s.channels + result.channels,
-                                    channelArtifacts = s.channelArtifacts +
-                                            result.channels.associate { ch -> ch.id to ArtifactDraft() },
+                                val appLabel = result.app.name
+                                val channelCount = result.channels.size
+                                val warnings = result.warnings
+                                postMessage(
+                                    buildString {
+                                        append("已导入应用「$appLabel」，新增 $channelCount 个渠道")
+                                        if (warnings.isNotEmpty()) {
+                                            append("；")
+                                            append(warnings.joinToString("；"))
+                                        }
+                                    },
+                                    isError = warnings.isNotEmpty(),
                                 )
-                                s
                             }
-                            val appLabel = result.app.name
-                            val channelCount = result.channels.size
-                            val warnings = result.warnings
-                            message.value = buildString {
-                                append("已导入应用「$appLabel」，新增 $channelCount 个渠道")
-                                if (warnings.isNotEmpty()) {
-                                    append("；")
-                                    append(warnings.joinToString("；"))
-                                }
+                            .onFailure {
+                                postMessage("导入失败：${it.message ?: "未知错误"}", isError = true)
                             }
-                        }
-                        .onFailure {
-                            message.value = "导入失败：${it.message ?: "未知错误"}"
-                        }
-                }
+                    }
+            } finally {
+                busyFlags.value = busyFlags.value.copy(importing = false)
+            }
         }
     }
 
@@ -571,7 +663,7 @@ class AndpubViewModel(
         val app = uiState.value.selectedApp ?: return
         val cleanName = intent.name.trim()
         validateChannelCredentials(intent.marketType, intent.credentials)?.let {
-            message.value = it
+            postMessage(it, isError = true)
             return
         }
 
@@ -620,7 +712,7 @@ class AndpubViewModel(
         val snapshot = uiState.value.snapshot
         val channel = snapshot.channels.firstOrNull { it.id == channelId }
         if (channel == null) {
-            message.value = "渠道不存在"
+            postMessage("渠道不存在", isError = true)
             return
         }
 
@@ -637,11 +729,11 @@ class AndpubViewModel(
     private fun testChannelConfig(intent: AndpubIntent.TestChannelConfig) {
         val app = uiState.value.selectedApp
         if (app == null) {
-            message.value = "请先选择应用"
+            postMessage("请先选择应用", isError = true)
             return
         }
         validateChannelCredentials(intent.marketType, intent.credentials)?.let {
-            message.value = it
+            postMessage(it, isError = true)
             channelTests.updateTest(intent.testKey, ChannelTestUiState(error = it))
             return
         }
@@ -660,12 +752,12 @@ class AndpubViewModel(
             result.fold(
                 onSuccess = {
                     channelTests.updateTest(intent.testKey, ChannelTestUiState(info = it))
-                    message.value = "${intent.marketType.displayName} 连接测试成功"
+                    postMessage("${intent.marketType.displayName} 连接测试成功")
                 },
                 onFailure = {
                     val error = it.message ?: "测试连接失败"
                     channelTests.updateTest(intent.testKey, ChannelTestUiState(error = error))
-                    message.value = "${intent.marketType.displayName} 连接测试失败：$error"
+                    postMessage("${intent.marketType.displayName} 连接测试失败：$error", isError = true)
                 },
             )
         }
@@ -675,7 +767,7 @@ class AndpubViewModel(
         val app = uiState.value.apps.firstOrNull { it.id == channel.appId } ?: return
         viewModelScope.launch {
             syncChannelInfo(app, channel)
-            message.value = "${channel.marketType.displayName} 应用信息已刷新"
+            postMessage("${channel.marketType.displayName} 应用信息已刷新")
         }
     }
 
@@ -683,38 +775,48 @@ class AndpubViewModel(
         val state = uiState.value
         val app = state.selectedApp
         if (app == null) {
-            message.value = "请先选择应用"
+            postMessage("请先选择应用", isError = true)
             return
         }
         if (state.selectedChannels.isEmpty()) {
-            message.value = "请先添加渠道"
+            postMessage("请先添加渠道", isError = true)
             return
         }
 
         viewModelScope.launch {
-            message.value = "正在查询全部渠道..."
-            val syncedChannels = state.selectedChannels.map { channel ->
-                syncChannelInfo(app, channel)
-            }
-            if (!notify) {
-                message.value = "已查询全部渠道"
-                return@launch
-            }
-            val webhookUrl = uiState.value.toolSettings.weComWebhookUrl.trim()
-            if (webhookUrl.isEmpty()) {
-                message.value = "已查询全部渠道；未配置企业微信 WebHook，未发送通知"
-                return@launch
-            }
+            busyFlags.value = busyFlags.value.copy(syncingAll = true)
+            try {
+                postMessage("正在查询全部渠道...")
+                val syncedChannels = state.selectedChannels.map { channel ->
+                    syncChannelInfo(app, channel)
+                }
+                if (!notify) {
+                    postMessage("已查询全部渠道")
+                    return@launch
+                }
+                val webhookUrl = uiState.value.toolSettings.weComWebhookUrl.trim()
+                if (webhookUrl.isEmpty()) {
+                    postMessage("已查询全部渠道；未配置企业微信 WebHook，未发送通知")
+                    return@launch
+                }
 
-            runCatching {
-                weComWebhookRemote.sendMarkdown(
-                    webhookUrl = webhookUrl,
-                    content = buildMarketVersionReport(app, syncedChannels),
+                runCatching {
+                    weComWebhookRemote.sendMarkdown(
+                        webhookUrl = webhookUrl,
+                        content = buildMarketVersionReport(app, syncedChannels),
+                    )
+                }.fold(
+                    onSuccess = { postMessage("已查询全部渠道并发送企业微信通知") },
+                    onFailure = {
+                        postMessage(
+                            "已查询全部渠道，企业微信通知失败：${it.message ?: "未知错误"}",
+                            isError = true,
+                        )
+                    },
                 )
-            }.fold(
-                onSuccess = { message.value = "已查询全部渠道并发送企业微信通知" },
-                onFailure = { message.value = "已查询全部渠道，企业微信通知失败：${it.message ?: "未知错误"}" },
-            )
+            } finally {
+                busyFlags.value = busyFlags.value.copy(syncingAll = false)
+            }
         }
     }
 
@@ -759,18 +861,15 @@ class AndpubViewModel(
     private fun createPublishTasks() {
         val state = uiState.value
         val app = state.selectedApp
-        if (app == null) {
-            message.value = "请先选择应用"
-            return
-        }
-        if (state.publishTargetChannels.isEmpty()) {
-            message.value = "请先勾选要发布的渠道"
+        val blockers = PublishGuards.blockers(state)
+        if (app == null || blockers.isNotEmpty()) {
+            postMessage(blockers.firstOrNull() ?: "请先选择应用", isError = true)
             return
         }
 
         viewModelScope.launch {
             isCreatingPublishTasks.value = true
-            message.value = "正在创建并执行发布任务..."
+            postMessage("正在创建并执行发布任务...")
             val vivoOptions = state.snapshot.vivoPublishOptions.copy(
                 productionConfirmed = state.vivoProductionConfirmed,
             )
@@ -822,7 +921,7 @@ class AndpubViewModel(
                         }.awaitAll()
                     }
                 }.onSuccess {
-                    message.value = "已创建并执行 ${it.size} 个发布任务"
+                    postMessage("已创建并执行 ${it.size} 个发布任务")
                 }.onFailure {
                     val errorMessage = it.message ?: "未知错误"
                     if (pendingTasks.isNotEmpty()) {
@@ -840,7 +939,7 @@ class AndpubViewModel(
                             },
                         )
                     }
-                    message.value = "创建发布任务失败：${it.message ?: "未知错误"}"
+                    postMessage("创建发布任务失败：${it.message ?: "未知错误"}", isError = true)
                 }
             } finally {
                 vivoProductionConfirmed.value = false
@@ -856,7 +955,7 @@ class AndpubViewModel(
             it.appId == app.id && it.status == PublishTaskStatus.Failed
         }
         if (failedTasks.isEmpty()) {
-            message.value = "没有需要重试的失败任务"
+            postMessage("没有需要重试的失败任务", isError = true)
             return
         }
 
@@ -866,7 +965,7 @@ class AndpubViewModel(
 
         viewModelScope.launch {
             isCreatingPublishTasks.value = true
-            message.value = "正在重试 ${failedTasks.size} 个失败任务..."
+            postMessage("正在重试 ${failedTasks.size} 个失败任务...")
             try {
                 coroutineScope {
                     val channelById = state.publishTargetChannels.associateBy { it.id }
@@ -903,7 +1002,7 @@ class AndpubViewModel(
                         }
                     }.awaitAll()
                 }
-                message.value = "重试完成"
+                postMessage("重试完成")
             } finally {
                 isCreatingPublishTasks.value = false
             }
@@ -916,12 +1015,12 @@ class AndpubViewModel(
         val app = state.apps.firstOrNull { it.id == task?.appId }
         val channel = state.channels.firstOrNull { it.id == task?.channelId }
         if (task == null || app == null || channel == null) {
-            message.value = "发布任务不存在"
+            postMessage("发布任务不存在", isError = true)
             return
         }
 
         viewModelScope.launch {
-            message.value = "正在刷新发布状态..."
+            postMessage("正在刷新发布状态...")
             val updated = refreshPublishTaskStatus(
                 app = app,
                 channel = channel,
@@ -937,7 +1036,7 @@ class AndpubViewModel(
                     }
                 )
             }
-            message.value = "发布状态已刷新"
+            postMessage("发布状态已刷新")
         }
     }
 
@@ -957,8 +1056,14 @@ class AndpubViewModel(
     ) {
         viewModelScope.launch {
             runCatching { updateState(transform) }
-                .onSuccess { message.value = nextMessage }
-                .onFailure { message.value = "保存本地状态失败：${it.message ?: "未知错误"}" }
+                .onSuccess {
+                    if (nextMessage != null) {
+                        postMessage(nextMessage)
+                    }
+                }
+                .onFailure {
+                    postMessage("保存本地状态失败：${it.message ?: "未知错误"}", isError = true)
+                }
         }
     }
 

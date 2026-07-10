@@ -16,7 +16,12 @@ import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -40,6 +45,8 @@ import io.github.loshine.andpub.platform.inspectLocalArtifact
 import io.github.loshine.andpub.platform.pickArtifactFilePath
 import io.github.loshine.andpub.presentation.AndpubIntent
 import io.github.loshine.andpub.presentation.AndpubUiState
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 // ─── Artifact section (top-level) ─────────────────────────────────────────────
@@ -140,14 +147,82 @@ fun ArtifactEditor(
     val scope = rememberCoroutineScope()
     val selectedPackageType = draft.packageType.takeIf { it in allowedPackageTypes }
         ?: allowedPackageTypes.first()
+    val selectedSourceType = if (draft.sourceType == ArtifactSourceType.Url && !allowUrl) {
+        ArtifactSourceType.LocalFile
+    } else {
+        draft.sourceType
+    }
     val effectiveDraft = draft.copy(
-        sourceType = if (draft.sourceType == ArtifactSourceType.Url && !allowUrl) {
-            ArtifactSourceType.LocalFile
-        } else {
-            draft.sourceType
-        },
+        sourceType = selectedSourceType,
         packageType = selectedPackageType,
     )
+
+    // Guards keep publishing disabled until this compatible type reaches persisted state.
+    LaunchedEffect(selectedPackageType, selectedSourceType, draft.packageType, draft.sourceType) {
+        if (draft.packageType != selectedPackageType || draft.sourceType != selectedSourceType) {
+            onDraftChange(
+                draft.copy(
+                    packageType = selectedPackageType,
+                    sourceType = selectedSourceType,
+                ),
+            )
+        }
+    }
+
+    var inspectJob by remember { mutableStateOf<Job?>(null) }
+    var inspectingPath by remember { mutableStateOf<String?>(null) }
+
+    fun cancelInspection() {
+        inspectJob?.cancel()
+        inspectJob = null
+        inspectingPath = null
+    }
+
+    fun startInspection(
+        path: String,
+        onPathCommitted: (String) -> Unit,
+        onResult: (String, Result<ArtifactInspection>) -> Unit,
+    ) {
+        val normalized = path.trim()
+        if (normalized.isEmpty()) return
+        cancelInspection()
+        inspectingPath = normalized
+        onPathCommitted(normalized)
+        inspectJob = scope.launch {
+            val result = runCatching {
+                inspectLocalArtifact(
+                    path = normalized,
+                    androidSdkPath = toolSettings.androidSdkPath,
+                    bundletoolPath = toolSettings.bundletoolPath,
+                ).getOrThrow()
+            }
+            if (!isActive || inspectingPath != normalized) return@launch
+            onResult(normalized, result)
+            inspectJob = null
+            inspectingPath = null
+        }
+    }
+
+    fun startUnifiedInspection(path: String) {
+        startInspection(
+            path = path,
+            onPathCommitted = { onDraftChange(effectiveDraft.withEditedValue(it)) },
+            onResult = onPickFile,
+        )
+    }
+
+    fun startSplitInspection(slot: SplitApkSlot, path: String) {
+        val part = effectiveDraft.partFor(slot)
+        startInspection(
+            path = path,
+            onPathCommitted = {
+                onDraftChange(effectiveDraft.withPart(slot, part.withEditedValue(it)))
+            },
+            onResult = { resolvedPath, result ->
+                onPickSplitFile(slot, resolvedPath, result)
+            },
+        )
+    }
 
     OutlinedCard(modifier = Modifier.fillMaxWidth()) {
         Column(
@@ -163,6 +238,7 @@ fun ArtifactEditor(
                         StableFilterChip(
                             selected = effectiveDraft.sourceType == type,
                             onClick = {
+                                cancelInspection()
                                 onDraftChange(effectiveDraft.copy(sourceType = type).withoutInspection())
                             },
                             label = { Text(type.displayName) },
@@ -175,6 +251,7 @@ fun ArtifactEditor(
                     StableFilterChip(
                         selected = effectiveDraft.packageType == type,
                         onClick = {
+                            cancelInspection()
                             onDraftChange(effectiveDraft.copy(packageType = type))
                         },
                         label = { Text(type.displayName) },
@@ -187,23 +264,28 @@ fun ArtifactEditor(
             }
 
             if (effectiveDraft.packageType == PackageType.SplitApk) {
-                SplitArtifactFileRow(
-                    slot = SplitApkSlot.Arm32,
-                    part = effectiveDraft.split32,
-                    sourceType = effectiveDraft.sourceType,
-                    toolSettings = toolSettings,
-                    onPartChange = { onDraftChange(effectiveDraft.copy(split32 = it)) },
-                    onPickFile = onPickSplitFile,
-                )
-                SplitArtifactFileRow(
-                    slot = SplitApkSlot.Arm64,
-                    part = effectiveDraft.split64,
-                    sourceType = effectiveDraft.sourceType,
-                    toolSettings = toolSettings,
-                    onPartChange = { onDraftChange(effectiveDraft.copy(split64 = it)) },
-                    onPickFile = onPickSplitFile,
-                )
+                SplitApkSlot.entries.forEach { slot ->
+                    val part = effectiveDraft.partFor(slot)
+                    SplitArtifactFileRow(
+                        slot = slot,
+                        part = part,
+                        sourceType = effectiveDraft.sourceType,
+                        isBusy = inspectingPath != null,
+                        isInspecting = inspectingPath == part.value,
+                        onPartChange = {
+                            cancelInspection()
+                            onDraftChange(effectiveDraft.withPart(slot, it))
+                        },
+                        onSelectFile = {
+                            scope.launch {
+                                pickArtifactFilePath()?.let { startSplitInspection(slot, it) }
+                            }
+                        },
+                        onParse = { startSplitInspection(slot, part.value) },
+                    )
+                }
             } else {
+                val isInspecting = inspectingPath != null
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -211,32 +293,34 @@ fun ArtifactEditor(
                 ) {
                     OutlinedTextField(
                         value = effectiveDraft.value,
-                        onValueChange = { onDraftChange(effectiveDraft.withEditedValue(it)) },
+                        onValueChange = {
+                            cancelInspection()
+                            onDraftChange(effectiveDraft.withEditedValue(it))
+                        },
                         label = {
                             Text(
                                 if (effectiveDraft.sourceType == ArtifactSourceType.Url) "URL"
-                                else "本地文件路径"
+                                else "本地文件路径",
                             )
                         },
                         singleLine = true,
+                        enabled = !isInspecting,
                         modifier = Modifier.weight(1f),
                     )
                     if (effectiveDraft.sourceType == ArtifactSourceType.LocalFile) {
                         OutlinedButton(
+                            enabled = !isInspecting,
                             onClick = {
                                 scope.launch {
                                     val path = pickArtifactFilePath() ?: return@launch
-                                    onPickFile(
-                                        path,
-                                        inspectLocalArtifact(
-                                            path = path,
-                                            androidSdkPath = toolSettings.androidSdkPath,
-                                            bundletoolPath = toolSettings.bundletoolPath,
-                                        ),
-                                    )
+                                    startUnifiedInspection(path)
                                 }
                             },
-                        ) { Text("选择") }
+                        ) { Text(if (isInspecting) "解析中" else "选择") }
+                        OutlinedButton(
+                            enabled = effectiveDraft.value.isNotBlank() && !isInspecting,
+                            onClick = { startUnifiedInspection(effectiveDraft.value) },
+                        ) { Text("解析") }
                     }
                 }
 
@@ -254,11 +338,12 @@ private fun SplitArtifactFileRow(
     slot: SplitApkSlot,
     part: ArtifactPart,
     sourceType: ArtifactSourceType,
-    toolSettings: ToolSettings,
+    isBusy: Boolean,
+    isInspecting: Boolean,
     onPartChange: (ArtifactPart) -> Unit,
-    onPickFile: (SplitApkSlot, String, Result<ArtifactInspection>) -> Unit,
+    onSelectFile: () -> Unit,
+    onParse: () -> Unit,
 ) {
-    val scope = rememberCoroutineScope()
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -271,29 +356,22 @@ private fun SplitArtifactFileRow(
                 label = {
                     Text(
                         if (sourceType == ArtifactSourceType.Url) "${slot.displayName} URL"
-                        else "${slot.displayName} 文件路径"
+                        else "${slot.displayName} 文件路径",
                     )
                 },
                 singleLine = true,
+                enabled = !isBusy,
                 modifier = Modifier.weight(1f),
             )
             if (sourceType == ArtifactSourceType.LocalFile) {
                 OutlinedButton(
-                    onClick = {
-                        scope.launch {
-                            val path = pickArtifactFilePath() ?: return@launch
-                            onPickFile(
-                                slot,
-                                path,
-                                inspectLocalArtifact(
-                                    path = path,
-                                    androidSdkPath = toolSettings.androidSdkPath,
-                                    bundletoolPath = toolSettings.bundletoolPath,
-                                ),
-                            )
-                        }
-                    },
-                ) { Text("选择") }
+                    enabled = !isBusy,
+                    onClick = onSelectFile,
+                ) { Text(if (isInspecting) "解析中" else "选择") }
+                OutlinedButton(
+                    enabled = part.value.isNotBlank() && !isBusy,
+                    onClick = onParse,
+                ) { Text("解析") }
             }
         }
         ArtifactPartSummary(slot.displayName, part)
@@ -456,6 +534,17 @@ fun List<MarketCapability>.allowedPackageTypes(): Set<PackageType> {
 
 fun ArtifactDraft.withEditedValue(value: String): ArtifactDraft =
     copy(value = value).withoutInspection()
+
+private fun ArtifactDraft.partFor(slot: SplitApkSlot): ArtifactPart = when (slot) {
+    SplitApkSlot.Arm32 -> split32
+    SplitApkSlot.Arm64 -> split64
+}
+
+private fun ArtifactDraft.withPart(slot: SplitApkSlot, part: ArtifactPart): ArtifactDraft =
+    when (slot) {
+        SplitApkSlot.Arm32 -> copy(split32 = part)
+        SplitApkSlot.Arm64 -> copy(split64 = part)
+    }
 
 fun ArtifactDraft.withoutInspection(): ArtifactDraft = copy(
     downloadedPath = "",

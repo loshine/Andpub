@@ -1,12 +1,12 @@
 package io.github.loshine.andpub.ui
 
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -17,14 +17,15 @@ import androidx.compose.material.icons.outlined.NotificationsOff
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.PrimaryTabRow
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -38,26 +39,23 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
-import io.github.loshine.andpub.domain.market.MarketDefinitions
-import io.github.loshine.andpub.domain.model.ChannelRecord
 import io.github.loshine.andpub.domain.model.MarketType
-import io.github.loshine.andpub.domain.model.VivoApiEnvironment
+import io.github.loshine.andpub.domain.model.PublishTaskRecord
+import io.github.loshine.andpub.domain.model.PublishTaskStatus
 import io.github.loshine.andpub.domain.model.vivoEnvironment
 import io.github.loshine.andpub.presentation.AndpubIntent
 import io.github.loshine.andpub.presentation.AndpubUiState
+import io.github.loshine.andpub.presentation.PublishGuards
 import io.github.loshine.andpub.ui.components.ArtifactSection
+import io.github.loshine.andpub.ui.components.ChannelEditorDialog
 import io.github.loshine.andpub.ui.components.ChannelInfoDialog
 import io.github.loshine.andpub.ui.components.ChannelSummaryCard
-import io.github.loshine.andpub.ui.components.ChannelEditorDialog
 import io.github.loshine.andpub.ui.components.EmptyState
 import io.github.loshine.andpub.ui.components.VivoPublishOptionSection
 import io.github.loshine.andpub.ui.components.displayTitle
-import io.github.loshine.andpub.ui.components.toChannelCredentials
-import io.github.loshine.andpub.domain.model.PublishTaskRecord
-import io.github.loshine.andpub.domain.model.PublishTaskStatus
-import androidx.compose.material3.AssistChip
-import androidx.compose.material3.AssistChipDefaults
 
 private enum class AppDetailTab(val title: String) {
     Channels("渠道管理"),
@@ -99,33 +97,45 @@ internal fun AppDetailScreen(
             TopAppBar(
                 title = {
                     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Text(app.name, style = MaterialTheme.typography.titleMedium)
                         Text(
-                            app.packageName,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            if (showPublishProcess && selectedTab == AppDetailTab.Publish) {
+                                "发布过程"
+                            } else {
+                                app.name
+                            },
+                            style = MaterialTheme.typography.titleMedium,
                         )
-                    }
-                },
-                navigationIcon = {
-                    if (onBack != null) {
-                        IconButton(onClick = onBack) {
-                            Icon(
-                                Icons.AutoMirrored.Outlined.ArrowBack,
-                                contentDescription = "返回",
+                        if (!(showPublishProcess && selectedTab == AppDetailTab.Publish)) {
+                            Text(
+                                app.packageName,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
                     }
                 },
-                actions = {
-                    state.message?.let {
-                        Text(
-                            it,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.padding(end = 8.dp),
-                        )
+                navigationIcon = {
+                    when {
+                        showPublishProcess && selectedTab == AppDetailTab.Publish -> {
+                            IconButton(onClick = { showPublishProcess = false }) {
+                                Icon(
+                                    Icons.AutoMirrored.Outlined.ArrowBack,
+                                    contentDescription = "返回配置",
+                                )
+                            }
+                        }
+                        onBack != null -> {
+                            IconButton(onClick = onBack) {
+                                Icon(
+                                    Icons.AutoMirrored.Outlined.ArrowBack,
+                                    contentDescription = "返回",
+                                )
+                            }
+                        }
                     }
+                },
+                actions = {
+                    // Space reserved for process-page controls rendered inside content when needed.
                 },
             )
         },
@@ -135,13 +145,20 @@ internal fun AppDetailScreen(
                 .padding(padding)
                 .fillMaxSize(),
         ) {
-            PrimaryTabRow(selectedTabIndex = selectedTab.ordinal) {
-                AppDetailTab.entries.forEach { tab ->
-                    Tab(
-                        selected = selectedTab == tab,
-                        onClick = { selectedTab = tab },
-                        text = { Text(tab.title) },
-                    )
+            if (!(showPublishProcess && selectedTab == AppDetailTab.Publish)) {
+                PrimaryTabRow(selectedTabIndex = selectedTab.ordinal) {
+                    AppDetailTab.entries.forEach { tab ->
+                        Tab(
+                            selected = selectedTab == tab,
+                            onClick = {
+                                selectedTab = tab
+                                if (tab != AppDetailTab.Publish) {
+                                    showPublishProcess = false
+                                }
+                            },
+                            text = { Text(tab.title) },
+                        )
+                    }
                 }
             }
 
@@ -160,9 +177,12 @@ internal fun AppDetailScreen(
                     if (showPublishProcess) {
                         PublishProcessPage(
                             state = state,
-                            onBack = { showPublishProcess = false },
-                            onRefreshTaskStatus = { onIntent(AndpubIntent.RefreshPublishTaskStatus(it)) },
-                            onRetryFailedTasks = { onIntent(AndpubIntent.RetryFailedPublishTasks) },
+                            onRefreshTaskStatus = {
+                                onIntent(AndpubIntent.RefreshPublishTaskStatus(it))
+                            },
+                            onRetryFailedTasks = {
+                                onIntent(AndpubIntent.RetryFailedPublishTasks)
+                            },
                         )
                     } else {
                         Column(
@@ -187,10 +207,18 @@ internal fun AppDetailScreen(
                                     onIntent(AndpubIntent.CreatePublishTasks)
                                 },
                             )
-                            // Historical task records from previous publish runs
                             val prevTasks = state.publishTasks.filter { it.appId == app.id }
                             if (prevTasks.isNotEmpty()) {
-                                Text("上次发布记录", style = MaterialTheme.typography.titleSmall)
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text("上次发布记录", style = MaterialTheme.typography.titleSmall)
+                                    TextButton(onClick = { showPublishProcess = true }) {
+                                        Text("查看过程")
+                                    }
+                                }
                                 prevTasks.forEach { task ->
                                     PreviousPublishTaskCard(task) { showPublishProcess = true }
                                 }
@@ -229,9 +257,7 @@ private fun ChannelSection(state: AndpubUiState, onIntent: (AndpubIntent) -> Uni
             horizontalArrangement = Arrangement.spacedBy(4.dp, Alignment.End),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            IconButton(
-                onClick = { notifyAfterQuery = !notifyAfterQuery },
-            ) {
+            IconButton(onClick = { notifyAfterQuery = !notifyAfterQuery }) {
                 Icon(
                     imageVector = if (notifyAfterQuery) Icons.Filled.Notifications
                     else Icons.Outlined.NotificationsOff,
@@ -240,13 +266,33 @@ private fun ChannelSection(state: AndpubUiState, onIntent: (AndpubIntent) -> Uni
                     else MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            IconButton(
+            TextButton(
                 onClick = { onIntent(AndpubIntent.SyncAllChannels(notifyAfterQuery)) },
+                enabled = state.selectedChannels.isNotEmpty() && !state.busy.syncingAll,
             ) {
-                Icon(Icons.Outlined.Refresh, contentDescription = "一键查询")
+                if (state.busy.syncingAll) {
+                    CircularProgressIndicator(
+                        modifier = Modifier
+                            .padding(end = 8.dp)
+                            .size(16.dp),
+                        strokeWidth = 2.dp,
+                    )
+                } else {
+                    Icon(
+                        Icons.Outlined.Refresh,
+                        contentDescription = null,
+                        modifier = Modifier.padding(end = 4.dp),
+                    )
+                }
+                Text(if (state.busy.syncingAll) "查询中…" else "一键查询")
             }
-            IconButton(onClick = { channelDialogId = NEW_CHANNEL_DIALOG_ID }) {
-                Icon(Icons.Outlined.Add, contentDescription = "新增渠道")
+            TextButton(onClick = { channelDialogId = NEW_CHANNEL_DIALOG_ID }) {
+                Icon(
+                    Icons.Outlined.Add,
+                    contentDescription = null,
+                    modifier = Modifier.padding(end = 4.dp),
+                )
+                Text("新增渠道")
             }
         }
     }
@@ -255,7 +301,9 @@ private fun ChannelSection(state: AndpubUiState, onIntent: (AndpubIntent) -> Uni
         EmptyState(
             icon = Icons.Outlined.Add,
             title = "暂无渠道",
-            description = "点击右上角 + 按钮添加市场渠道",
+            description = "添加市场渠道后即可查询应用信息并发布",
+            actionLabel = "新增渠道",
+            onAction = { channelDialogId = NEW_CHANNEL_DIALOG_ID },
         )
     } else {
         state.selectedChannels.forEach { channel ->
@@ -374,17 +422,22 @@ private fun PublishTargetSection(state: AndpubUiState, onIntent: (AndpubIntent) 
                             } else {
                                 channel.marketType.displayName
                             }
-                            Text(detail, style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(
+                                detail,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
                         }
                         if (showVivoOptions) {
-                            TextButton(onClick = {
-                                expandedVivoOptions[channel.id] =
-                                    expandedVivoOptions[channel.id] != true
-                            }) {
+                            TextButton(
+                                onClick = {
+                                    expandedVivoOptions[channel.id] =
+                                        expandedVivoOptions[channel.id] != true
+                                },
+                            ) {
                                 Text(
                                     if (expandedVivoOptions[channel.id] == true) "收起选项"
-                                    else "发布选项"
+                                    else "发布选项",
                                 )
                             }
                         }
@@ -413,22 +466,51 @@ private fun PublishTargetSection(state: AndpubUiState, onIntent: (AndpubIntent) 
 
 @Composable
 private fun PublishStartSection(state: AndpubUiState, onCreate: () -> Unit) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
+    val blockers = remember(
+        state.publishMode,
+        state.publishTargetChannels,
+        state.unifiedArtifactDraft,
+        state.artifactDrafts,
+        state.vivoProductionConfirmed,
+        state.isCreatingPublishTasks,
+        state.selectedAppId,
     ) {
-        Text(
-            "勾选渠道并填写产物后点击「开始发布」，所有选中市场并行提交。",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.weight(1f).padding(end = 8.dp),
-        )
-        Button(
-            enabled = state.publishTargetChannels.isNotEmpty() && !state.isCreatingPublishTasks,
-            onClick = onCreate,
+        PublishGuards.blockers(state)
+    }
+    val canStart = blockers.isEmpty()
+
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        if (blockers.isNotEmpty() && state.publishTargetChannels.isNotEmpty()) {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                blockers.forEach { blocker ->
+                    Text(
+                        "· $blocker",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(if (state.isCreatingPublishTasks) "发布中…" else "开始发布")
+            Text(
+                "勾选渠道并填写产物后点击「开始发布」，所有选中市场并行提交。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f).padding(end = 8.dp),
+            )
+            Button(
+                enabled = canStart,
+                onClick = onCreate,
+            ) {
+                Text(if (state.isCreatingPublishTasks) "发布中…" else "开始发布")
+            }
         }
     }
 }
@@ -448,7 +530,15 @@ private fun PreviousPublishTaskCard(
         else ->
             MaterialTheme.colorScheme.surfaceVariant to MaterialTheme.colorScheme.onSurfaceVariant
     }
-    OutlinedCard(modifier = Modifier.fillMaxWidth()) {
+    OutlinedCard(
+        onClick = onViewProcess,
+        modifier = Modifier
+            .fillMaxWidth()
+            .semantics {
+                contentDescription =
+                    "查看 ${task.marketType.displayName} 发布过程，状态 ${task.status.displayName}"
+            },
+    ) {
         Row(
             modifier = Modifier.padding(12.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -465,14 +555,18 @@ private fun PreviousPublishTaskCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            AssistChip(
-                onClick = onViewProcess,
-                label = { Text(task.status.displayName, style = MaterialTheme.typography.labelSmall) },
-                colors = AssistChipDefaults.assistChipColors(
-                    containerColor = containerColor,
-                    labelColor = labelColor,
-                ),
-            )
+            // Non-interactive status label (card itself is the only action target).
+            Surface(
+                color = containerColor,
+                shape = MaterialTheme.shapes.small,
+            ) {
+                Text(
+                    task.status.displayName,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = labelColor,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                )
+            }
         }
     }
 }

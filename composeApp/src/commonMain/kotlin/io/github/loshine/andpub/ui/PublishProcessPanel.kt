@@ -7,11 +7,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.Error
 import androidx.compose.material.icons.outlined.HourglassEmpty
@@ -20,17 +20,14 @@ import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedCard
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -48,15 +45,12 @@ import io.github.loshine.andpub.domain.model.PublishTaskStage
 import io.github.loshine.andpub.domain.model.PublishTaskStatus
 import io.github.loshine.andpub.domain.model.isTerminal
 import io.github.loshine.andpub.presentation.AndpubUiState
-import io.github.loshine.andpub.ui.components.ArtifactInspectionSummary
 
-// ─── Publish process page ──────────────────────────────────────────────────────
+// ─── Publish process page (content only; parent owns TopAppBar) ────────────────
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun PublishProcessPage(
     state: AndpubUiState,
-    onBack: () -> Unit,
     onRefreshTaskStatus: (String) -> Unit,
     onRetryFailedTasks: () -> Unit,
 ) {
@@ -72,69 +66,73 @@ internal fun PublishProcessPage(
     }
     val failedCount = tasks.count { it.status == PublishTaskStatus.Failed }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("发布过程") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "返回配置")
-                    }
-                },
-                actions = {
-                    Text("详细日志", style = MaterialTheme.typography.labelMedium,
-                        modifier = Modifier.padding(end = 4.dp))
-                    Switch(
-                        checked = showDetailLogs,
-                        onCheckedChange = { showDetailLogs = it },
-                        modifier = Modifier.padding(end = 8.dp),
-                    )
-                },
+    Column(
+        modifier = Modifier
+            .padding(16.dp)
+            .fillMaxSize(),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.End,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                "详细日志",
+                style = MaterialTheme.typography.labelMedium,
+                modifier = Modifier.padding(end = 4.dp),
             )
-        },
-    ) { padding ->
-        Column(
+            Switch(
+                checked = showDetailLogs,
+                onCheckedChange = { showDetailLogs = it },
+            )
+        }
+
+        if (allTerminal) {
+            PublishSummaryBanner(
+                successCount = successCount,
+                failedCount = failedCount,
+                hasFailedTasks = hasFailedTasks,
+                isBusy = state.isCreatingPublishTasks,
+                onRetryFailedTasks = onRetryFailedTasks,
+            )
+        }
+
+        if (state.isCreatingPublishTasks && tasks.isEmpty()) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                Text("正在准备并检查产物…")
+            }
+            return@Column
+        }
+
+        if (tasks.isEmpty()) {
+            Text(
+                "暂无发布任务",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            return@Column
+        }
+
+        LazyVerticalGrid(
+            columns = GridCells.Adaptive(minSize = 360.dp),
             modifier = Modifier
-                .padding(padding)
-                .padding(16.dp)
-                .fillMaxSize(),
+                .fillMaxWidth()
+                .heightIn(min = 240.dp, max = 1200.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            if (allTerminal) {
-                PublishSummaryBanner(
-                    successCount = successCount,
-                    failedCount = failedCount,
-                    hasFailedTasks = hasFailedTasks,
-                    onRetryFailedTasks = onRetryFailedTasks,
+            gridItems(tasks, key = { it.id }) { task ->
+                PublishProcessCard(
+                    task = task,
+                    showDetailLogs = showDetailLogs,
+                    canRefreshStatus = task.canRefreshPublishStatus(),
+                    onRefreshStatus = { onRefreshTaskStatus(task.id) },
                 )
-            }
-
-            if (state.isCreatingPublishTasks && tasks.isEmpty()) {
-                Text("正在准备并检查产物…")
-                return@Column
-            }
-
-            if (tasks.isEmpty()) {
-                Text("暂无发布任务")
-                return@Column
-            }
-
-            LazyVerticalGrid(
-                columns = GridCells.Adaptive(minSize = 360.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = 240.dp, max = 1200.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                gridItems(tasks, key = { it.id }) { task ->
-                    PublishProcessCard(
-                        task = task,
-                        showDetailLogs = showDetailLogs,
-                        canRefreshStatus = task.canRefreshPublishStatus(),
-                        onRefreshStatus = { onRefreshTaskStatus(task.id) },
-                    )
-                }
             }
         }
     }
@@ -145,6 +143,7 @@ private fun PublishSummaryBanner(
     successCount: Int,
     failedCount: Int,
     hasFailedTasks: Boolean,
+    isBusy: Boolean,
     onRetryFailedTasks: () -> Unit,
 ) {
     Row(
@@ -179,6 +178,7 @@ private fun PublishSummaryBanner(
         if (hasFailedTasks) {
             Button(
                 onClick = onRetryFailedTasks,
+                enabled = !isBusy,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = MaterialTheme.colorScheme.errorContainer,
                     contentColor = MaterialTheme.colorScheme.onErrorContainer,
@@ -223,8 +223,11 @@ private fun PublishProcessCard(
                 }
             }
             task.publishEnvironment?.let {
-                Text("目标环境：$it", style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(
+                    "目标环境：$it",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
 
             if (showDetailLogs) {
@@ -374,9 +377,13 @@ internal fun PublishTaskRecord.publishSummary(): List<String> =
         PublishTaskStatus.Failed ->
             listOf("失败：${logs.lastOrNull { it.level == LogLevel.Error }?.message ?: "发布失败"}")
         PublishTaskStatus.Ready ->
-            listOf(if (marketType == io.github.loshine.andpub.domain.model.MarketType.Vivo)
-                "待提交：尚未调用 vivo 上传接口"
-            else "仅完成校验：当前市场暂未接入厂商发布")
+            listOf(
+                if (marketType == io.github.loshine.andpub.domain.model.MarketType.Vivo) {
+                    "待提交：尚未调用 vivo 上传接口"
+                } else {
+                    "仅完成校验：当前市场暂未接入厂商发布"
+                },
+            )
         PublishTaskStatus.Created -> listOf("已创建：等待检查")
         PublishTaskStatus.Validating -> listOf("检查中：正在准备产物")
         PublishTaskStatus.Uploading ->
