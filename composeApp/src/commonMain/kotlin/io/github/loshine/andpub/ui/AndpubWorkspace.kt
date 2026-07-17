@@ -1,5 +1,15 @@
 package io.github.loshine.andpub.ui
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -48,6 +58,7 @@ import io.github.loshine.andpub.presentation.AndpubUiState
 import io.github.loshine.andpub.presentation.AndpubViewModel
 import io.github.loshine.andpub.ui.components.AndpubMessageEffect
 import io.github.loshine.andpub.ui.components.AndpubSnackbarHost
+import io.github.loshine.andpub.ui.components.EmptyState
 import kotlinx.coroutines.launch
 import org.koin.compose.viewmodel.koinViewModel
 
@@ -97,19 +108,30 @@ fun AndpubWorkspace(
                     .consumeWindowInsets(padding)
                     .fillMaxSize(),
             ) {
-                if (state.busy.anyBusy || state.isCreatingPublishTasks) {
+                AnimatedVisibility(
+                    visible = state.busy.anyBusy || state.isCreatingPublishTasks,
+                    enter = expandVertically(tween(200)) + fadeIn(tween(200)),
+                    exit = shrinkVertically(tween(200)) + fadeOut(tween(200)),
+                ) {
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                 }
                 Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                    when (currentDestination) {
-                        TopLevelDestination.Apps -> AdaptiveAppsLayout(
-                            state = state,
-                            onIntent = viewModel::onIntent,
-                        )
-                        TopLevelDestination.Settings -> SettingsScreen(
-                            state = state,
-                            onIntent = viewModel::onIntent,
-                        )
+                    AnimatedContent(
+                        targetState = currentDestination,
+                        transitionSpec = { fadeIn(tween(200)) togetherWith fadeOut(tween(150)) },
+                        label = "top-destination",
+                        modifier = Modifier.fillMaxSize(),
+                    ) { destination ->
+                        when (destination) {
+                            TopLevelDestination.Apps -> AdaptiveAppsLayout(
+                                state = state,
+                                onIntent = viewModel::onIntent,
+                            )
+                            TopLevelDestination.Settings -> SettingsScreen(
+                                state = state,
+                                onIntent = viewModel::onIntent,
+                            )
+                        }
                     }
                 }
             }
@@ -144,21 +166,36 @@ private fun CompactAppsLayout(
     // If the user deletes the selected app, go back to the list automatically.
     if (state.selectedApp == null) showDetail = false
 
-    if (!showDetail) {
-        AppListScreen(
-            state = state,
-            onIntent = onIntent,
-            onAppSelected = { appId ->
-                onIntent(AndpubIntent.SelectApp(appId))
-                showDetail = true
-            },
-        )
-    } else {
-        AppDetailScreen(
-            state = state,
-            onIntent = onIntent,
-            onBack = { showDetail = false },
-        )
+    AnimatedContent(
+        targetState = showDetail,
+        transitionSpec = {
+            if (targetState) {
+                (slideInHorizontally(tween(250)) { it } + fadeIn(tween(250))) togetherWith
+                        (slideOutHorizontally(tween(250)) { -it } + fadeOut(tween(250)))
+            } else {
+                (slideInHorizontally(tween(250)) { -it } + fadeIn(tween(250))) togetherWith
+                        (slideOutHorizontally(tween(250)) { it } + fadeOut(tween(250)))
+            }
+        },
+        label = "compact-nav",
+        modifier = Modifier.fillMaxSize(),
+    ) { detail ->
+        if (!detail) {
+            AppListScreen(
+                state = state,
+                onIntent = onIntent,
+                onAppSelected = { appId ->
+                    onIntent(AndpubIntent.SelectApp(appId))
+                    showDetail = true
+                },
+            )
+        } else {
+            AppDetailScreen(
+                state = state,
+                onIntent = onIntent,
+                onBack = { showDetail = false },
+            )
+        }
     }
 }
 
@@ -181,11 +218,26 @@ private fun ExpandedAppsLayout(
             tonalElevation = 1.dp,
             modifier = Modifier.fillMaxSize(),
         ) {
-            AppDetailScreen(
-                state = state,
-                onIntent = onIntent,
-                onBack = null,
-            )
+            AnimatedContent(
+                targetState = state.selectedApp == null,
+                transitionSpec = { fadeIn(tween(250)) togetherWith fadeOut(tween(200)) },
+                label = "expanded-detail",
+            ) { noSelection ->
+                if (noSelection) {
+                    EmptyState(
+                        icon = Icons.Outlined.Apps,
+                        title = "尚未选择应用",
+                        description = "从左侧列表选择一个应用，或新建一个",
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                } else {
+                    AppDetailScreen(
+                        state = state,
+                        onIntent = onIntent,
+                        onBack = null,
+                    )
+                }
+            }
         }
     }
 }
@@ -290,12 +342,20 @@ internal fun SettingsScreen(
                 Text("保存设置")
             }
         }
-        toolMessages.forEach { message ->
-            Text(
-                message,
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.padding(top = 4.dp),
-            )
+        AnimatedVisibility(
+            visible = toolMessages.isNotEmpty(),
+            enter = expandVertically(tween(200)) + fadeIn(tween(200)),
+            exit = shrinkVertically(tween(150)) + fadeOut(tween(150)),
+        ) {
+            Column {
+                toolMessages.forEach { message ->
+                    Text(
+                        message,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
+                }
+            }
         }
     }
 }

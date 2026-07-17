@@ -1,5 +1,10 @@
 package io.github.loshine.andpub.ui
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -33,14 +38,18 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberTopAppBarState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
 import io.github.loshine.andpub.domain.model.AppRecord
 import io.github.loshine.andpub.domain.usecase.ValidatePackageNameUseCase
 import io.github.loshine.andpub.presentation.AndpubIntent
@@ -135,6 +144,7 @@ internal fun AppListScreen(
                         onEdit = { appDialogId = app.id },
                         onDelete = { deletingAppId = app.id },
                         channelCount = state.channels.count { it.appId == app.id },
+                        modifier = Modifier.animateItem(),
                     )
                 }
             }
@@ -241,6 +251,7 @@ internal fun AppSidebar(
                     onEdit = { appDialogId = app.id },
                     onDelete = { deletingAppId = app.id },
                     channelCount = state.channels.count { it.appId == app.id },
+                    modifier = Modifier.animateItem(),
                 )
             }
         }
@@ -319,16 +330,26 @@ private fun AppListCard(
     channelCount: Int,
     modifier: Modifier = Modifier,
 ) {
-    val containerColor = if (selected) {
-        MaterialTheme.colorScheme.secondaryContainer
-    } else {
-        MaterialTheme.colorScheme.surface
+    val interactionSource = remember { MutableInteractionSource() }
+    val hovered by interactionSource.collectIsHoveredAsState()
+    val targetContainerColor = when {
+        selected -> MaterialTheme.colorScheme.secondaryContainer
+        hovered -> MaterialTheme.colorScheme.surfaceVariant
+        else -> MaterialTheme.colorScheme.surface
     }
+    val containerColor by animateColorAsState(
+        targetValue = targetContainerColor,
+        animationSpec = tween(200),
+        label = "containerColor",
+    )
 
     ElevatedCard(
         onClick = onClick,
         colors = CardDefaults.elevatedCardColors(containerColor = containerColor),
-        modifier = modifier.fillMaxWidth(),
+        interactionSource = interactionSource,
+        modifier = modifier
+            .fillMaxWidth()
+            .hoverable(interactionSource),
     ) {
         Row(
             modifier = Modifier.padding(12.dp),
@@ -386,6 +407,13 @@ internal fun AppEditorDialog(
 ) {
     var appName by remember(appId) { mutableStateOf(initialName) }
     var packageName by remember(appId) { mutableStateOf(initialPackageName) }
+    val focusRequester = remember { FocusRequester() }
+
+    // Dialog windows gain focus asynchronously; a short delay makes the request reliable.
+    LaunchedEffect(appId) {
+        delay(150)
+        focusRequester.requestFocus()
+    }
 
     val nameError = when {
         appName.isBlank() -> "应用名必填"
@@ -413,7 +441,9 @@ internal fun AppEditorDialog(
                     supportingText = {
                         if (appName.isNotEmpty() && nameError != null) Text(nameError)
                     },
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .focusRequester(focusRequester),
                 )
                 OutlinedTextField(
                     value = packageName,

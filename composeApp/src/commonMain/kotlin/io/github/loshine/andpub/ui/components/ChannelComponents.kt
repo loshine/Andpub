@@ -1,5 +1,12 @@
 package io.github.loshine.andpub.ui.components
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -14,10 +21,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.CloudOff
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Error
-import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.HourglassEmpty
 import androidx.compose.material.icons.outlined.Info
@@ -25,6 +32,7 @@ import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -40,6 +48,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.unit.dp
 import io.github.loshine.andpub.domain.market.HuaweiCredentialKeys
 import io.github.loshine.andpub.domain.market.MarketDefinitions
@@ -73,6 +82,12 @@ fun ChannelSummaryCard(
     onSync: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val expandRotation by animateFloatAsState(
+        targetValue = if (expanded) 180f else 0f,
+        animationSpec = tween(250),
+        label = "expandRotation",
+    )
+
     OutlinedCard(modifier = modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier.padding(16.dp),
@@ -135,8 +150,9 @@ fun ChannelSummaryCard(
                     }
                     IconButton(onClick = onToggleExpanded) {
                         Icon(
-                            if (expanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
+                            Icons.Outlined.ExpandMore,
                             contentDescription = if (expanded) "收起" else "展开",
+                            modifier = Modifier.rotate(expandRotation),
                         )
                     }
                     IconButton(onClick = onEdit) {
@@ -152,8 +168,15 @@ fun ChannelSummaryCard(
                 }
             }
 
-            if (expanded) {
-                ChannelExpandedContent(channel)
+            AnimatedVisibility(
+                visible = expanded,
+                enter = expandVertically(tween(250)) + fadeIn(tween(250)),
+                exit = shrinkVertically(tween(200)) + fadeOut(tween(200)),
+            ) {
+                Column {
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                    ChannelExpandedContent(channel)
+                }
             }
         }
     }
@@ -168,7 +191,8 @@ private fun SyncStatusLabel(status: ChannelSyncStatus) {
             Icons.Outlined.CheckCircle to MaterialTheme.colorScheme.primary
         ChannelSyncStatus.Failed ->
             Icons.Outlined.Error to MaterialTheme.colorScheme.error
-        ChannelSyncStatus.NotSynced -> return
+        ChannelSyncStatus.NotSynced ->
+            Icons.Outlined.CloudOff to MaterialTheme.colorScheme.onSurfaceVariant
     }
     Row(
         horizontalArrangement = Arrangement.spacedBy(4.dp),

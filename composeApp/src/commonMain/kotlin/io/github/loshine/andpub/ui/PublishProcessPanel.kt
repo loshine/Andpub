@@ -1,8 +1,19 @@
 package io.github.loshine.andpub.ui
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -13,9 +24,13 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.CloudUpload
 import androidx.compose.material.icons.outlined.Error
 import androidx.compose.material.icons.outlined.HourglassEmpty
+import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.Schedule
+import androidx.compose.material.icons.outlined.Verified
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.Button
@@ -26,6 +41,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedCard
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -88,7 +104,11 @@ internal fun PublishProcessPage(
             )
         }
 
-        if (allTerminal) {
+        AnimatedVisibility(
+            visible = allTerminal,
+            enter = expandVertically(tween(250)) + fadeIn(tween(250)),
+            exit = shrinkVertically(tween(200)) + fadeOut(tween(200)),
+        ) {
             PublishSummaryBanner(
                 successCount = successCount,
                 failedCount = failedCount,
@@ -132,6 +152,7 @@ internal fun PublishProcessPage(
                     showDetailLogs = showDetailLogs,
                     canRefreshStatus = task.canRefreshPublishStatus(),
                     onRefreshStatus = { onRefreshTaskStatus(task.id) },
+                    modifier = Modifier.animateItem(),
                 )
             }
         }
@@ -146,45 +167,63 @@ private fun PublishSummaryBanner(
     isBusy: Boolean,
     onRetryFailedTasks: () -> Unit,
 ) {
-    Row(
+    val containerColor = if (hasFailedTasks) {
+        MaterialTheme.colorScheme.errorContainer
+    } else {
+        MaterialTheme.colorScheme.primaryContainer
+    }
+    val contentColor = if (hasFailedTasks) {
+        MaterialTheme.colorScheme.onErrorContainer
+    } else {
+        MaterialTheme.colorScheme.onPrimaryContainer
+    }
+    Surface(
+        color = containerColor,
+        contentColor = contentColor,
+        shape = MaterialTheme.shapes.medium,
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (successCount > 0) {
-            Icon(
-                Icons.Outlined.CheckCircle,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-            )
-            Text(
-                "${successCount} 个市场已提交",
-                color = MaterialTheme.colorScheme.primary,
-                style = MaterialTheme.typography.bodyMedium,
-            )
-        }
-        if (failedCount > 0) {
-            Icon(
-                Icons.Outlined.Error,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.error,
-            )
-            Text(
-                "${failedCount} 个市场失败",
-                color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.bodyMedium,
-            )
-        }
-        if (hasFailedTasks) {
-            Button(
-                onClick = onRetryFailedTasks,
-                enabled = !isBusy,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.errorContainer,
-                    contentColor = MaterialTheme.colorScheme.onErrorContainer,
-                ),
-            ) {
-                Text("重试失败任务（${failedCount} 个）")
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (successCount > 0) {
+                Icon(
+                    Icons.Outlined.CheckCircle,
+                    contentDescription = null,
+                    tint = contentColor,
+                )
+                Text(
+                    "${successCount} 个市场已提交",
+                    color = contentColor,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
+            if (failedCount > 0) {
+                Icon(
+                    Icons.Outlined.Error,
+                    contentDescription = null,
+                    tint = contentColor,
+                )
+                Text(
+                    "${failedCount} 个市场失败",
+                    color = contentColor,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
+            Spacer(modifier = Modifier.weight(1f))
+            if (hasFailedTasks) {
+                Button(
+                    onClick = onRetryFailedTasks,
+                    enabled = !isBusy,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error,
+                        contentColor = MaterialTheme.colorScheme.onError,
+                    ),
+                ) {
+                    Text("重试失败任务（${failedCount} 个）")
+                }
             }
         }
     }
@@ -198,10 +237,32 @@ private fun PublishProcessCard(
     showDetailLogs: Boolean,
     canRefreshStatus: Boolean,
     onRefreshStatus: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    OutlinedCard(modifier = Modifier.fillMaxWidth()) {
+    val targetBorderColor = when (task.status) {
+        PublishTaskStatus.Submitted, PublishTaskStatus.Accepted ->
+            MaterialTheme.colorScheme.primary
+        PublishTaskStatus.Failed ->
+            MaterialTheme.colorScheme.error
+        PublishTaskStatus.Uploading, PublishTaskStatus.Validating ->
+            MaterialTheme.colorScheme.secondary
+        else ->
+            MaterialTheme.colorScheme.outlineVariant
+    }
+    val borderColor by animateColorAsState(
+        targetValue = targetBorderColor,
+        animationSpec = tween(300),
+        label = "cardBorderColor",
+    )
+
+    OutlinedCard(
+        border = BorderStroke(1.dp, borderColor),
+        modifier = modifier.fillMaxWidth(),
+    ) {
         Column(
-            modifier = Modifier.padding(16.dp),
+            modifier = Modifier
+                .animateContentSize()
+                .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Row(
@@ -259,7 +320,7 @@ private fun PublishProcessCard(
 
 @Composable
 private fun TaskStatusChip(status: PublishTaskStatus) {
-    val (containerColor, labelColor) = when (status) {
+    val (targetContainerColor, targetLabelColor) = when (status) {
         PublishTaskStatus.Submitted, PublishTaskStatus.Accepted ->
             MaterialTheme.colorScheme.primaryContainer to MaterialTheme.colorScheme.onPrimaryContainer
         PublishTaskStatus.Failed ->
@@ -269,19 +330,30 @@ private fun TaskStatusChip(status: PublishTaskStatus) {
         else ->
             MaterialTheme.colorScheme.surfaceVariant to MaterialTheme.colorScheme.onSurfaceVariant
     }
+    val containerColor by animateColorAsState(
+        targetValue = targetContainerColor,
+        animationSpec = tween(300),
+        label = "chipContainerColor",
+    )
+    val labelColor by animateColorAsState(
+        targetValue = targetLabelColor,
+        animationSpec = tween(300),
+        label = "chipLabelColor",
+    )
     AssistChip(
         onClick = {},
         label = { Text(status.displayName, style = MaterialTheme.typography.labelSmall) },
         leadingIcon = {
-            when (status) {
-                PublishTaskStatus.Submitted, PublishTaskStatus.Accepted ->
-                    Icon(Icons.Outlined.CheckCircle, null)
-                PublishTaskStatus.Failed ->
-                    Icon(Icons.Outlined.Error, null)
-                PublishTaskStatus.Uploading, PublishTaskStatus.Validating ->
-                    Icon(Icons.Outlined.HourglassEmpty, null)
-                else -> {}
+            val icon = when (status) {
+                PublishTaskStatus.Created -> Icons.Outlined.Schedule
+                PublishTaskStatus.Ready -> Icons.Outlined.PlayArrow
+                PublishTaskStatus.Validating -> Icons.Outlined.HourglassEmpty
+                PublishTaskStatus.Uploading -> Icons.Outlined.CloudUpload
+                PublishTaskStatus.Submitted -> Icons.Outlined.CheckCircle
+                PublishTaskStatus.Accepted -> Icons.Outlined.Verified
+                PublishTaskStatus.Failed -> Icons.Outlined.Error
             }
+            Icon(icon, contentDescription = null)
         },
         colors = AssistChipDefaults.assistChipColors(
             containerColor = containerColor,
@@ -309,6 +381,11 @@ private fun PublishProcessSection(
 private fun PublishProgressRows(logs: List<PublishTaskLog>) {
     logs.forEach { log ->
         val percent = log.progressPercent ?: return@forEach
+        val animatedProgress by animateFloatAsState(
+            targetValue = percent / 100f,
+            animationSpec = tween(300),
+            label = "progress",
+        )
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -322,7 +399,7 @@ private fun PublishProgressRows(logs: List<PublishTaskLog>) {
                 Text("$percent%", style = MaterialTheme.typography.labelSmall)
             }
             LinearProgressIndicator(
-                progress = { percent / 100f },
+                progress = { animatedProgress },
                 modifier = Modifier.fillMaxWidth(),
             )
             Text(log.message, style = MaterialTheme.typography.bodySmall)

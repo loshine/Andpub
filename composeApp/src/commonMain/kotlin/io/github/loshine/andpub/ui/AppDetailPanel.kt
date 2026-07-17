@@ -1,5 +1,14 @@
 package io.github.loshine.andpub.ui
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -21,6 +30,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.PrimaryTabRow
@@ -96,21 +106,24 @@ internal fun AppDetailScreen(
         topBar = {
             TopAppBar(
                 title = {
-                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Text(
-                            if (showPublishProcess && selectedTab == AppDetailTab.Publish) {
-                                "发布过程"
-                            } else {
-                                app.name
-                            },
-                            style = MaterialTheme.typography.titleMedium,
-                        )
-                        if (!(showPublishProcess && selectedTab == AppDetailTab.Publish)) {
+                    val inPublishProcess = showPublishProcess && selectedTab == AppDetailTab.Publish
+                    Crossfade(
+                        targetState = inPublishProcess,
+                        animationSpec = tween(200),
+                        label = "detail-title",
+                    ) { process ->
+                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                             Text(
-                                app.packageName,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                if (process) "发布过程" else app.name,
+                                style = MaterialTheme.typography.titleMedium,
                             )
+                            if (!process) {
+                                Text(
+                                    app.packageName,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
                         }
                     }
                 },
@@ -162,69 +175,76 @@ internal fun AppDetailScreen(
                 }
             }
 
-            when (selectedTab) {
-                AppDetailTab.Channels ->
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .verticalScroll(rememberScrollState())
-                            .padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp),
-                    ) {
-                        ChannelSection(state = state, onIntent = onIntent)
-                    }
-                AppDetailTab.Publish ->
-                    if (showPublishProcess) {
-                        PublishProcessPage(
-                            state = state,
-                            onRefreshTaskStatus = {
-                                onIntent(AndpubIntent.RefreshPublishTaskStatus(it))
-                            },
-                            onRetryFailedTasks = {
-                                onIntent(AndpubIntent.RetryFailedPublishTasks)
-                            },
-                        )
-                    } else {
+            AnimatedContent(
+                targetState = selectedTab to showPublishProcess,
+                transitionSpec = { fadeIn(tween(200)) togetherWith fadeOut(tween(150)) },
+                label = "detail-tab",
+                modifier = Modifier.fillMaxSize(),
+            ) { (tab, inProcess) ->
+                when (tab) {
+                    AppDetailTab.Channels ->
                         Column(
                             modifier = Modifier
                                 .fillMaxSize()
                                 .verticalScroll(rememberScrollState())
                                 .padding(16.dp),
-                            verticalArrangement = Arrangement.spacedBy(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp),
                         ) {
-                            PublishTargetSection(state = state, onIntent = onIntent)
-                            if (state.publishTargetChannels.isNotEmpty()) {
-                                ArtifactSection(
-                                    state = state,
-                                    targetChannels = state.publishTargetChannels,
-                                    onIntent = onIntent,
-                                )
-                            }
-                            PublishStartSection(
+                            ChannelSection(state = state, onIntent = onIntent)
+                        }
+                    AppDetailTab.Publish ->
+                        if (inProcess) {
+                            PublishProcessPage(
                                 state = state,
-                                onCreate = {
-                                    showPublishProcess = true
-                                    onIntent(AndpubIntent.CreatePublishTasks)
+                                onRefreshTaskStatus = {
+                                    onIntent(AndpubIntent.RefreshPublishTaskStatus(it))
+                                },
+                                onRetryFailedTasks = {
+                                    onIntent(AndpubIntent.RetryFailedPublishTasks)
                                 },
                             )
-                            val prevTasks = state.publishTasks.filter { it.appId == app.id }
-                            if (prevTasks.isNotEmpty()) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    Text("上次发布记录", style = MaterialTheme.typography.titleSmall)
-                                    TextButton(onClick = { showPublishProcess = true }) {
-                                        Text("查看过程")
-                                    }
+                        } else {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .verticalScroll(rememberScrollState())
+                                    .padding(16.dp),
+                                verticalArrangement = Arrangement.spacedBy(16.dp),
+                            ) {
+                                PublishTargetSection(state = state, onIntent = onIntent)
+                                if (state.publishTargetChannels.isNotEmpty()) {
+                                    ArtifactSection(
+                                        state = state,
+                                        targetChannels = state.publishTargetChannels,
+                                        onIntent = onIntent,
+                                    )
                                 }
-                                prevTasks.forEach { task ->
-                                    PreviousPublishTaskCard(task) { showPublishProcess = true }
+                                PublishStartSection(
+                                    state = state,
+                                    onCreate = {
+                                        showPublishProcess = true
+                                        onIntent(AndpubIntent.CreatePublishTasks)
+                                    },
+                                )
+                                val prevTasks = state.publishTasks.filter { it.appId == app.id }
+                                if (prevTasks.isNotEmpty()) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Text("上次发布记录", style = MaterialTheme.typography.titleSmall)
+                                        TextButton(onClick = { showPublishProcess = true }) {
+                                            Text("查看过程")
+                                        }
+                                    }
+                                    prevTasks.forEach { task ->
+                                        PreviousPublishTaskCard(task) { showPublishProcess = true }
+                                    }
                                 }
                             }
                         }
-                    }
+                }
             }
         }
     }
@@ -442,7 +462,11 @@ private fun PublishTargetSection(state: AndpubUiState, onIntent: (AndpubIntent) 
                             }
                         }
                     }
-                    if (showVivoOptions && expandedVivoOptions[channel.id] == true) {
+                    AnimatedVisibility(
+                        visible = showVivoOptions && expandedVivoOptions[channel.id] == true,
+                        enter = expandVertically(tween(200)) + fadeIn(tween(200)),
+                        exit = shrinkVertically(tween(150)) + fadeOut(tween(150)),
+                    ) {
                         VivoPublishOptionSection(
                             state = state,
                             channel = channel,
@@ -483,7 +507,11 @@ private fun PublishStartSection(state: AndpubUiState, onCreate: () -> Unit) {
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        if (blockers.isNotEmpty() && state.publishTargetChannels.isNotEmpty()) {
+        AnimatedVisibility(
+            visible = blockers.isNotEmpty() && state.publishTargetChannels.isNotEmpty(),
+            enter = expandVertically(tween(200)) + fadeIn(tween(200)),
+            exit = shrinkVertically(tween(150)) + fadeOut(tween(150)),
+        ) {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 blockers.forEach { blocker ->
                     Text(
@@ -509,7 +537,16 @@ private fun PublishStartSection(state: AndpubUiState, onCreate: () -> Unit) {
                 enabled = canStart,
                 onClick = onCreate,
             ) {
-                Text(if (state.isCreatingPublishTasks) "发布中…" else "开始发布")
+                if (state.isCreatingPublishTasks) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp),
+                        strokeWidth = 2.dp,
+                        color = LocalContentColor.current,
+                    )
+                    Text("发布中…", modifier = Modifier.padding(start = 8.dp))
+                } else {
+                    Text("开始发布")
+                }
             }
         }
     }
